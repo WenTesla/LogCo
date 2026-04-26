@@ -14,8 +14,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Log grouping preprocess")
     parser.add_argument("--input_dir", type=str, default="./inputs/BGL", help="输入目录")
     parser.add_argument("--output_dir", type=str, default="./outputs/BGL", help="输出目录")
-    parser.add_argument("--window_size", type=int, default=20, help="滑动窗口大小")
-    parser.add_argument("--step_size", type=int, default=10, help="滑动窗口步长")
+    parser.add_argument("--window_size", type=int, default=60, help="滑动窗口大小")
+    parser.add_argument("--step_size", type=int, default=60, help="滑动窗口步长")
     return parser.parse_args()
 
 
