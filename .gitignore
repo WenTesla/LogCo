@@ -6,4 +6,9 @@ __MACOSX/
 .idea/
 outputs/
 inputs/
-
+.codex
+.venv/
+bert_cache/
+codex.sh
+.env
+inputs/

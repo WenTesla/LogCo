@@ -1,0 +1,25 @@
+[project]
+name = "logco"
+version = "0.1.0"
+description = "Cascaded log anomaly detection with EDL and LLM-RAG."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "faiss-cpu>=1.8.0",
+    "langchain-community>=0.4.1",
+    "langchain-huggingface>=1.2.2",
+    "langchain-openai>=1.1.14",
+    "openai>=1.0.0",
+    "pandas>=2.2.0",
+    "sentence-transformers>=2.7.0",
+]
+
+[dependency-groups]
+sm = [
+    "matplotlib>=3.8.0",
+    "scikit-learn>=1.4.0",
+    "torch>=2.2.0",
+    "torchvision>=0.17.0",
+    "tqdm>=4.66.0",
+    "transformers>=4.40.0",
+]

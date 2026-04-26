@@ -1,0 +1,39 @@
+  1. 不确定性感知检索（Uncertainty-Aware Retrieval）
+
+  - 让 top_k、检索温度、检索阈值随 SM 不确定度动态变化。
+  - 高不确定样本用更广检索，低不确定样本用窄检索降成本。
+
+  2. 因果式反事实检索（Counterfactual RAG）
+
+  - 同时检索“最像正常”和“最像异常”两组证据，让 LLM 做对比判决。
+  - 输出“为何不是正常/异常”的反事实解释，增强可解释性。
+
+  3. 成本约束级联决策（Budgeted Cascade）
+
+  - 把“准确率-延迟-API成本”做成联合优化目标。
+  - 学一个路由器决定是否调用 LLM、调用哪个模型、调用几轮。
+
+  4. 检索去重与原型库（Prototype Memory）
+
+  - 你已经做了去重，可以上升为“原型日志库”：按模板聚类，只存代表原型+频次。
+  - 同时报告“调用压缩率 vs 性能损失”，这很容易形成实验亮点。
+
+  5. 漂移感知在线更新（Drift-Aware Update）
+
+  - 检测日志分布漂移时，触发向量库增量更新和阈值重校准。
+  - 做持续学习场景实验（跨时间窗口）。
+
+  6. 结构化提示与自校验（Self-Verification）
+
+  - LLM 先给判别，再强制第二步“证据一致性检查”。
+  - 若证据冲突，输出 uncertain 并回退到保守策略，降低误报。
+
+  7. 风险分级输出（Risk-Tiered Detection）
+
+  - 不只二分类，输出 normal / suspicious / anomaly / critical。
+  - 结合运维动作建议，做更贴近生产的告警策略。
+
+  8. 跨数据集泛化实验（Cross-Dataset Transfer）
+
+  - 在 BGL/Spirit/HDFS/Thunderbird 间做零样本/少样本迁移。
+  - 证明你的级联方法比纯 SM 或纯 LLM 更稳健。
