@@ -9,23 +9,23 @@ from collections import defaultdict
 from utils.base import logger, parse_args, BGL_regex
 
 # 加载HDFS标签文件，返回一个字典，键为BlockId，值为标签（0或1）    
-def load_label_file(path="../Datasets/HDFS/preprocessed/anomaly_label.csv")->defaultdict:
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"标签文件 {path} 不存在，请检查路径是否正确。")
-    blk_label_dict = defaultdict() 
-    blk_df = pd.read_csv(path,engine="c",memory_map=True) 
-    for _ , row in tqdm(blk_df.iterrows()): 
-        blk_label_dict[row["BlockId"]] = 1 if row["Label"] == "Anomaly" else 0 
-    print(f"加载标签文件 {path} 完成, 共 {len(blk_label_dict)} 个 BlockId 标签.")
-    return blk_label_dict
+# def load_label_file(path="../Datasets/HDFS/preprocessed/anomaly_label.csv")->defaultdict:
+#     if not os.path.isfile(path):
+#         raise FileNotFoundError(f"标签文件 {path} 不存在，请检查路径是否正确。")
+#     blk_label_dict = defaultdict() 
+#     blk_df = pd.read_csv(path,engine="c",memory_map=True) 
+#     for _ , row in tqdm(blk_df.iterrows()): 
+#         blk_label_dict[row["BlockId"]] = 1 if row["Label"] == "Anomaly" else 0 
+#     print(f"加载标签文件 {path} 完成, 共 {len(blk_label_dict)} 个 BlockId 标签.")
+    # return blk_label_dict
 
 def group_logs(structured_log_file:str, window_size:int, step_size:int, output_dir:str,group_type:str="fixed"):
     # 读取结构化日志文件
     structured_log = pd.read_csv(structured_log_file,engine="c",memory_map=True)
+    logger.info(f"已加载结构化日志文件: {structured_log_file}, 共 {len(structured_log)} 条日志")
     # 分组的数据
     grouped_data = []
     total_logs = len(structured_log)
-    logger.info(f"结构化日志总数: {total_logs}")
     
     if group_type=="fixed": # 固定的滑动窗口
         logger.info(f"按固定滑动窗口分组日志中,窗口大小: {window_size}, 步长: {step_size}")

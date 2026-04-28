@@ -14,6 +14,7 @@ hf_logging.set_verbosity_error()
 class LogDataset(Dataset):
     def __init__(self, csv_path, bert_path, max_len=128, batch_size=128, device=None, cache_dir=None):
         self.df = pd.read_csv(csv_path)
+        print(f"✅ 已加载数据集: {csv_path}, 共 {len(self.df)} 条日志")
         csv_file = Path(csv_path).resolve()
         dataset_name = csv_file.parent.name
         if cache_dir is None:
@@ -36,9 +37,12 @@ class LogDataset(Dataset):
 
         self.templates = self.df["Templates"].tolist()
         self.labels = self.df["Label"].tolist()
+        self.texts = [self._template_to_text(t) for t in self.templates]
 
         # 设备
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.tokenizer = AutoTokenizer.from_pretrained(bert_path, use_fast=True)
+        self._report_length_stats(self.texts, self.tokenizer, max_len)
 
         # ==========================================
         # 关键优化：有缓存就直接加载，没有才提取
@@ -50,7 +54,8 @@ class LogDataset(Dataset):
         else:
             print("⚡ 首次运行，提取 BERT 特征（优化版）...")
             self.features = self._extract_bert_features_fast(
-                templates=self.templates,
+                texts=self.texts,
+                tokenizer=self.tokenizer,
                 bert_path=bert_path,
                 max_len=max_len,
                 batch_size=batch_size,
@@ -80,14 +85,13 @@ class LogDataset(Dataset):
         return str(value)
 
     @classmethod
-    def _extract_bert_features_fast(cls, templates, bert_path, max_len, batch_size, device):
+    def _extract_bert_features_fast(cls, texts, tokenizer, bert_path, max_len, batch_size, device):
         # ==========================================
         # 速度优化核心
         # 1. 半精度 FP16
         # 2. 更大 batch
         # 3. tokenizer 并行
         # ==========================================
-        tokenizer = AutoTokenizer.from_pretrained(bert_path, use_fast=True)
         model = BertModel.from_pretrained(
             bert_path,
             num_labels=0,
@@ -95,7 +99,6 @@ class LogDataset(Dataset):
         ).to(device).half()
         model.eval()
 
-        texts = [cls._template_to_text(t) for t in templates]
         features = []
 
         with torch.no_grad():
@@ -115,6 +118,37 @@ class LogDataset(Dataset):
                 features.extend(pooled.cpu().numpy())
 
         return torch.tensor(np.array(features), dtype=torch.float32)
+
+    @staticmethod
+    def _report_length_stats(texts, tokenizer, max_len, stat_batch_size=4096):
+        token_lens = []
+        for i in tqdm(range(0, len(texts), stat_batch_size), desc="统计Token长度"):
+            batch_texts = texts[i:i + stat_batch_size]
+            encoded = tokenizer(
+                batch_texts,
+                add_special_tokens=True,
+                truncation=False,
+                padding=False,
+                return_length=True,
+            )
+            token_lens.extend(encoded["length"])
+
+        if not token_lens:
+            print("⚠️ Token长度统计: 数据为空")
+            return
+
+        arr = np.array(token_lens)
+        over_max = int((arr > max_len).sum())
+        total = len(arr)
+        print("\n📏 输入Token长度统计")
+        print(f"总样本数              : {total}")
+        print(f"平均长度              : {arr.mean():.2f}")
+        print(f"中位数(P50)           : {np.percentile(arr, 50):.0f}")
+        print(f"P90 / P95 / P99       : {np.percentile(arr, 90):.0f} / {np.percentile(arr, 95):.0f} / {np.percentile(arr, 99):.0f}")
+        print(f"最大长度              : {arr.max()}")
+        print(f"MAX_LEN               : {max_len}")
+        print(f"超出MAX_LEN样本数     : {over_max}")
+        print(f"超出MAX_LEN样本占比   : {over_max / total:.2%}\n")
 
     def __len__(self):
         return len(self.df)

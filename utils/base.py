@@ -12,11 +12,25 @@ logger = logging.getLogger("LogCo")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Log grouping preprocess")
-    parser.add_argument("--input_dir", type=str, default="./inputs/BGL", help="输入目录")
-    parser.add_argument("--output_dir", type=str, default="./outputs/BGL", help="输出目录")
+    parser.add_argument(
+        "--DATASET",
+        "--dataset",
+        dest="DATASET",
+        type=str,
+        default="Thunderbird",
+        choices=["BGL", "HDFS", "Spirit", "Thunderbird"],
+        help="数据集名称，可选: BGL/HDFS/Spirit/Thunderbird",
+    )
+    parser.add_argument("--input_dir", type=str, default=None, help="输入目录")
+    parser.add_argument("--output_dir", type=str, default=None, help="输出目录")
     parser.add_argument("--window_size", type=int, default=60, help="滑动窗口大小")
     parser.add_argument("--step_size", type=int, default=60, help="滑动窗口步长")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.input_dir is None:
+        args.input_dir = f"./inputs/{args.DATASET}"
+    if args.output_dir is None:
+        args.output_dir = f"./outputs/{args.DATASET}"
+    return args
 
 
 def BGL_regex(content: str) -> str:

@@ -14,6 +14,26 @@ Rules:
 - Return valid JSON only, with no extra text.
 """.strip()
 
+RAG_SYSTEM_PROMPT_BINARY = """
+You are a strict binary anomaly detection assistant for system logs.
+Your task is to determine whether the target log event is only:
+1) ANOMALY, or
+2) NORMAL.
+
+Use:
+1) the target log,
+2) retrieved reference logs from a knowledge base,
+3) optional small-model score and uncertainty signals.
+
+Rules:
+- Prioritize evidence from retrieved references.
+- Do not assume missing facts.
+- Do not output "UNCERTAIN" or any third class.
+- If evidence is weak, still choose the more likely class (ANOMALY or NORMAL).
+- Keep reasoning concise and evidence-based.
+- Return valid JSON only, with no extra text.
+""".strip()
+
 
 RAG_USER_PROMPT = """
 Target log event:
@@ -36,6 +56,35 @@ Decision requirements:
 Return JSON with this exact schema:
 {{
   "decision": "ANOMALY|NORMAL|UNCERTAIN",
+  "confidence": 0.0,
+  "rationale": "short explanation",
+  "supporting_refs": ["R1","R2"],
+  "risk_type": "optional short type",
+  "recommended_action": "optional short action"
+}}
+""".strip()
+
+RAG_USER_PROMPT_BINARY = """
+Target log event:
+{target_log}
+
+Small-model signals (optional):
+- score: {small_model_score}
+- uncertainty: {small_model_uncertainty}
+
+Retrieved references (top-k):
+{retrieved_logs}
+
+Decision requirements:
+1) Compare target log with retrieved references by semantics, pattern, and severity.
+2) Return one of: "ANOMALY", "NORMAL".
+3) Provide confidence in [0,1].
+4) Provide short rationale.
+5) Provide supporting_refs as a list like ["R2","R5"].
+
+Return JSON with this exact schema:
+{{
+  "decision": "ANOMALY|NORMAL",
   "confidence": 0.0,
   "rationale": "short explanation",
   "supporting_refs": ["R1","R2"],

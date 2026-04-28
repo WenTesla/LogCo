@@ -15,16 +15,16 @@ SAVE_MODEL_PATH = os.path.join(
 )
 
 # ===================== 训练超参数 =====================
-MAX_LEN = int(os.getenv("MAX_LEN", "128"))
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "192"))
-EPOCHS = int(os.getenv("EPOCHS", "50"))
+MAX_LEN = int(os.getenv("MAX_LEN", "512"))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "32"))
+EPOCHS = int(os.getenv("EPOCHS", "100"))
 LR = float(os.getenv("LR", "2e-5"))
 NUM_CLASSES = int(os.getenv("NUM_CLASSES", "2"))
 FEATURE_BATCH_SIZE = int(os.getenv("FEATURE_BATCH_SIZE", "512"))
 ANNEALING = float(os.getenv("ANNEALING", "0.01"))
 
 # ===================== 划分策略（与 LLM/RAG 对齐） =====================
-SPLIT_MODE = os.getenv("SPLIT_MODE", os.getenv("RAG_SPLIT_MODE", "ordered"))
+SPLIT_MODE = os.getenv("SPLIT_MODE", os.getenv("RAG_SPLIT_MODE", "ordered")) # ordered / random
 TRAIN_RATIO = float(os.getenv("TRAIN_RATIO", os.getenv("RAG_TRAIN_RATIO", "0.7")))
 RANDOM_SEED = int(os.getenv("RANDOM_SEED", os.getenv("RAG_RANDOM_SEED", "42")))
 

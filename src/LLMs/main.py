@@ -7,9 +7,15 @@ from tqdm import tqdm
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
 from llm_client import get_llm
-from prompt_templates import LOG_ANOMALY_PROMPT, RAG_SYSTEM_PROMPT, RAG_USER_PROMPT
+from prompt_templates import (
+    LOG_ANOMALY_PROMPT,
+    RAG_SYSTEM_PROMPT,
+    RAG_USER_PROMPT,
+    RAG_SYSTEM_PROMPT_BINARY,
+    RAG_USER_PROMPT_BINARY,
+)
 from vector_store import LogVectorStore
-from config import DATASET
+from config import DATASET, DECISION_MODE
 
 # 初始化
 llm = get_llm()
@@ -70,7 +76,14 @@ def _parse_result(text: str):
     }
 
 
-def detect(log: str, vector_db: LogVectorStore, small_model_score: str = "N/A", small_model_uncertainty: str = "N/A", verbose: bool = True):
+def detect(
+    log: str,
+    vector_db: LogVectorStore,
+    small_model_score: str = "N/A",
+    small_model_uncertainty: str = "N/A",
+    verbose: bool = True,
+    decision_mode: str = DECISION_MODE,
+):
     if verbose:
         print("\n" + "="*60)
         print(f"日志：{log}")
@@ -82,14 +95,22 @@ def detect(log: str, vector_db: LogVectorStore, small_model_score: str = "N/A", 
     )
 
     # 2. 构造提示词
-    user_prompt = RAG_USER_PROMPT.format(
+    mode = str(decision_mode).strip().lower()
+    if mode == "binary":
+        system_prompt = RAG_SYSTEM_PROMPT_BINARY
+        user_prompt_template = RAG_USER_PROMPT_BINARY
+    else:
+        system_prompt = RAG_SYSTEM_PROMPT
+        user_prompt_template = RAG_USER_PROMPT
+
+    user_prompt = user_prompt_template.format(
         retrieved_logs=context,
         target_log=log,
         small_model_score=small_model_score,
         small_model_uncertainty=small_model_uncertainty,
     )
     prompt = LOG_ANOMALY_PROMPT.format(
-        system_prompt=RAG_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
 
@@ -140,7 +161,7 @@ def _resolve_uncertain_csv_path(dataset: str) -> Path:
     )
 
 
-def second_pass_for_high_uncertain(dataset: str = DATASET):
+def second_pass_for_high_uncertain(dataset: str = DATASET, decision_mode: str = DECISION_MODE):
     vector_db = _get_vector_db(dataset)
     input_csv = _resolve_uncertain_csv_path(dataset)
     df = pd.read_csv(input_csv)
@@ -180,6 +201,7 @@ def second_pass_for_high_uncertain(dataset: str = DATASET):
             small_model_score=str(row.small_model_score_mean),
             small_model_uncertainty=str(row.small_model_uncertainty_mean),
             verbose=False,
+            decision_mode=decision_mode,
         )
         results.append(
             {
@@ -239,5 +261,11 @@ def second_pass_for_high_uncertain(dataset: str = DATASET):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="仅对高不确定样本做 LLM 二次检测")
     parser.add_argument("--dataset", default=DATASET, help="数据集名称，如 Spirit/BGL/HDFS/Thunderbird")
+    parser.add_argument(
+        "--decision-mode",
+        default=DECISION_MODE,
+        choices=["triage", "binary"],
+        help="triage=正常/异常/不确定, binary=仅正常/异常",
+    )
     args = parser.parse_args()
-    second_pass_for_high_uncertain(dataset=args.dataset)
+    second_pass_for_high_uncertain(dataset=args.dataset, decision_mode=args.decision_mode)

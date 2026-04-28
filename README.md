@@ -115,6 +115,12 @@ python src/LLMs/vector_store.py \
 python src/LLMs/main.py --dataset Spirit
 ```
 
+若希望二次检测只输出正常/异常（不输出 uncertain）：
+
+```bash
+python src/LLMs/main.py --dataset Spirit --decision-mode binary
+```
+
 产物（`outputs/<DATASET>/results/`）：
 - `llm_second_pass_high_uncertain_unique.csv`（去重粒度）
 - `llm_second_pass_high_uncertain.csv`（映射回样本粒度）

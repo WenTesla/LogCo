@@ -19,3 +19,6 @@ RAG_SPLIT_MODE = os.getenv("RAG_SPLIT_MODE", "ordered")  # ordered / random
 RAG_TRAIN_RATIO = float(os.getenv("RAG_TRAIN_RATIO", "0.7"))
 RAG_RANDOM_SEED = int(os.getenv("RAG_RANDOM_SEED", "42"))
 RAG_USE_TRAIN_ONLY = os.getenv("RAG_USE_TRAIN_ONLY", "true").lower() == "true"
+
+# 二次检测决策模式：triage(正常/异常/不确定) 或 binary(仅正常/异常)
+DECISION_MODE = os.getenv("DECISION_MODE", "triage").strip().lower()
