@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -30,6 +31,9 @@ model.eval()
 # ===================== 计算不确定性 =====================
 uncertainties = []
 correct = []
+all_preds = []
+all_labels = []
+all_probs = []
 
 with torch.no_grad():
     pbar = tqdm(test_loader, desc="不确定性评估")
@@ -45,6 +49,9 @@ with torch.no_grad():
 
         uncertainties.extend(unc.cpu().numpy())
         correct.extend((pred == labels).cpu().numpy())
+        all_preds.extend(pred.cpu().numpy())
+        all_labels.extend(labels.cpu().numpy())
+        all_probs.extend(prob[:, 1].cpu().numpy())
 
 # ===================== 分组 =====================
 unc = np.array(uncertainties)
@@ -83,6 +90,37 @@ for i, er in enumerate(error_rates):
         f" G{i+1:<1}    | {group_counts[i]:7d} | {ratio:7.2f} | "
         f"{group_correct_counts[i]:7d} | {group_error_counts[i]:5d} | {er:12.2f}%"
     )
+
+# ===================== 导出高/低不确定样本 =====================
+test_indices = test_dataset.indices
+source_df = pd.read_csv(config.GROUPED_LOGS_PATH)
+all_templates = [source_df.loc[i, "Templates"] for i in test_indices]
+
+df_result = pd.DataFrame(
+    {
+        "TestIndex": test_indices,
+        "Templates": all_templates,
+        "Label": all_labels,
+        "Pred": all_preds,
+        "AnomalyScore": all_probs,
+        "Uncertainty": uncertainties,
+    }
+)
+
+top_ratio = float(config.TOP_RATIO)
+topk = int(len(df_result) * top_ratio)
+high_df = df_result.sort_values(by="Uncertainty", ascending=False).head(topk)
+low_df = df_result.sort_values(by="Uncertainty", ascending=True).head(topk)
+
+save_high_path = os.path.join("outputs", config.DATASET, "results", "high_uncertain_samples.csv")
+save_low_path = os.path.join("outputs", config.DATASET, "results", "low_uncertain_samples.csv")
+high_df.to_csv(save_high_path, index=False, encoding="utf-8")
+low_df.to_csv(save_low_path, index=False, encoding="utf-8")
+
+print(f"\n✅ 高不确定性样本已保存至：{save_high_path}")
+print(f"✅ 共保存 {len(high_df)} 条（前 {top_ratio * 100:.0f}% 不确定性最高样本）")
+print(f"✅ 低不确定性样本已保存至：{save_low_path}")
+print(f"✅ 共保存 {len(low_df)} 条（前 {top_ratio * 100:.0f}% 不确定性最低样本）")
 
 # ===================== 绘图 =====================
 plt.figure(figsize=(7,4))

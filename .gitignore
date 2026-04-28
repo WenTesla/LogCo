@@ -11,4 +11,4 @@ inputs/
 bert_cache/
 codex.sh
 .env
-inputs/
+src/SM/checkpoints/

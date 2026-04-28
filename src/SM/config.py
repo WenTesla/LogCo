@@ -5,7 +5,7 @@ import os
 BERT_PATH = os.getenv("BERT_PATH", "bert-base-uncased")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DATASET = os.getenv("DATASET", "Spirit") # BGL / HDFS / Thunderbird / Spirit
+DATASET = os.getenv("DATASET", "BGL") # BGL / HDFS / Thunderbird / Spirit
 GROUPED_LOGS_PATH = os.path.join("outputs", DATASET, "grouped_logs.csv")
 SAVE_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),

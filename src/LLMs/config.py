@@ -2,7 +2,7 @@ import os
 
 # ===================== LLM 配置 =====================
 LLM_TYPE = os.getenv("LLM_TYPE", "openai")  # mock / openai / ollama
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-f273396839ba400eb48dff31f034ee0d")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "xxx")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
 

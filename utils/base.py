@@ -17,7 +17,7 @@ def parse_args():
         "--dataset",
         dest="DATASET",
         type=str,
-        default="Thunderbird",
+        default="BGL",
         choices=["BGL", "HDFS", "Spirit", "Thunderbird"],
         help="数据集名称，可选: BGL/HDFS/Spirit/Thunderbird",
     )
