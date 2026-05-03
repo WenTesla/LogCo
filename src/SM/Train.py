@@ -1,3 +1,4 @@
+import config
 import torch
 import pandas as pd
 import os
@@ -5,7 +6,6 @@ from torch.utils.data import DataLoader, TensorDataset, Subset
 from transformers import get_linear_schedule_with_warmup
 from torch.optim import AdamW
 from tqdm import tqdm
-import config
 from Model import BertEDL, edl_loss
 from LogDataset import LogDataset
 

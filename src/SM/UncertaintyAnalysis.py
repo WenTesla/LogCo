@@ -1,10 +1,10 @@
+import config
 import torch
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-import config
 from Model import BertEDL
 from LogDataset import LogDataset
 import os
@@ -56,14 +56,15 @@ with torch.no_grad():
 # ===================== 分组 =====================
 unc = np.array(uncertainties)
 cor = np.array(correct)
-thresholds = np.quantile(unc, [0.2, 0.4, 0.6, 0.8])
+thresholds = np.quantile(unc, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
 groups = np.digitize(unc, thresholds)
+num_groups = len(thresholds) + 1
 
 error_rates = []
 group_counts = []
 group_correct_counts = []
 group_error_counts = []
-for g in range(5):
+for g in range(num_groups):
     mask = groups == g
     cnt = int(mask.sum())
     group_counts.append(cnt)
@@ -124,7 +125,9 @@ print(f"✅ 共保存 {len(low_df)} 条（前 {top_ratio * 100:.0f}% 不确定�
 
 # ===================== 绘图 =====================
 plt.figure(figsize=(7,4))
-plt.bar([f"G{i+1}" for i in range(5)], error_rates, color=['g','c','y','orange','red'])
+group_labels = [f"G{i+1}" for i in range(num_groups)]
+bar_colors = plt.cm.viridis(np.linspace(0.1, 0.9, num_groups))
+plt.bar(group_labels, error_rates, color=bar_colors)
 plt.title(f"{config.DATASET} Uncertainty vs Error Rate")
 plt.ylabel("Error Rate (%)")
 plt.xlabel("Uncertainty Group")

@@ -23,7 +23,6 @@ LogCo/
       UncertaintyAnalysis.py
     LLMs/
       config.py
-      llm_client.py
       prompt_templates.py
       vector_store.py
       main.py
@@ -61,7 +60,7 @@ export RANDOM_SEED=42
 LLM 额外配置：
 
 ```bash
-export LLM_TYPE=openai                # mock/openai/ollama
+export LLM_TYPE=openai                # openai/ollama
 export OPENAI_API_KEY=your_api_key
 export OPENAI_MODEL=deepseek-v4-flash
 ```
@@ -149,5 +148,4 @@ python src/evaluate_cascade.py --dataset Spirit --scope high_uncertain
 ## Notes
 
 - 默认 LLM 后端为 `openai`。
-- 若需离线验证可设 `LLM_TYPE=mock`。
 - 向量库默认 embedding 为 `BAAI/bge-small-en-v1.5`，可通过 `BGE3_MODEL_NAME` 覆盖。

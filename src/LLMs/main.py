@@ -2,11 +2,11 @@ import json
 import ast
 from pathlib import Path
 import argparse
+import requests
 import pandas as pd
 from tqdm import tqdm
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
-from llm_client import get_llm
 from prompt_templates import (
     LOG_ANOMALY_PROMPT,
     RAG_SYSTEM_PROMPT,
@@ -15,7 +15,75 @@ from prompt_templates import (
     RAG_USER_PROMPT_BINARY,
 )
 from vector_store import LogVectorStore
-from config import DATASET, DECISION_MODE
+from config import (
+    DATASET,
+    DECISION_MODE,
+    LLM_TYPE,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    OPENAI_MODEL,
+    OLLAMA_MODEL,
+    OLLAMA_BASE_URL,
+)
+
+
+class HTTPChatLLM:
+    def __init__(self, api_key: str, base_url: str, model: str, temperature: float = 0.0):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.temperature = temperature
+
+    def invoke(self, prompt: str):
+        response = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": self.temperature,
+                "thinking": {"type": "disabled"},
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        return type("HTTPResponse", (), {"content": content})()
+
+
+def get_llm():
+    if LLM_TYPE == "openai":
+        if not OPENAI_API_KEY:
+            raise ValueError("缺少 OPENAI_API_KEY，请先设置环境变量。")
+        try:
+            from langchain_openai import ChatOpenAI
+
+            return ChatOpenAI(
+                api_key=OPENAI_API_KEY,
+                base_url=OPENAI_BASE_URL,
+                model=OPENAI_MODEL,
+                temperature=0.0,
+            )
+        except ModuleNotFoundError:
+            return HTTPChatLLM(
+                api_key=OPENAI_API_KEY,
+                base_url=OPENAI_BASE_URL,
+                model=OPENAI_MODEL,
+                temperature=0.0,
+            )
+    if LLM_TYPE == "ollama":
+        from langchain_ollama import OllamaLLM
+
+        return OllamaLLM(
+            model=OLLAMA_MODEL,
+            base_url=OLLAMA_BASE_URL,
+            temperature=0.0,
+        )
+    raise ValueError("LLM_TYPE 必须是 openai / ollama")
 
 # 初始化
 llm = get_llm()

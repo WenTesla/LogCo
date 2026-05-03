@@ -1,9 +1,9 @@
+import config
 import torch
 import pandas as pd
 from torch.utils.data import DataLoader
 from sklearn.metrics import classification_report, roc_auc_score, precision_recall_fscore_support
 from tqdm import tqdm
-import config
 from Model import BertEDL
 from LogDataset import LogDataset
 import os

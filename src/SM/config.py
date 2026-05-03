@@ -1,6 +1,9 @@
 import torch
 import os
 
+# 配置export HF_ENDPOINT=https://hf-mirror.com
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 # ===================== SM 配置 =====================
 BERT_PATH = os.getenv("BERT_PATH", "bert-base-uncased")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -16,7 +19,7 @@ SAVE_MODEL_PATH = os.path.join(
 
 # ===================== 训练超参数 =====================
 MAX_LEN = int(os.getenv("MAX_LEN", "512"))
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "32"))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "256"))
 EPOCHS = int(os.getenv("EPOCHS", "100"))
 LR = float(os.getenv("LR", "2e-5"))
 NUM_CLASSES = int(os.getenv("NUM_CLASSES", "2"))

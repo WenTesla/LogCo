@@ -7,8 +7,6 @@
 # Unzip the downloaded file
 # unzip -o preprocessed.zip -d ./inputs
 
-# Remove the downloaded zip file
-# rm -f preprocessed.zip
 
 # Keep only one structured file in each dataset folder
 for dataset in HDFS BGL Spirit Thunderbird; do
@@ -30,3 +28,6 @@ done
 
 # Clean macOS unzip metadata if present
 rm -rf ./inputs/__MACOSX
+
+# Remove the downloaded zip file
+# rm -f preprocessed.zip

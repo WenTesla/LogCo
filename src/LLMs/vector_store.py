@@ -6,21 +6,6 @@ from typing import List
 import pandas as pd
 from tqdm import tqdm  # 新增
 
-try:
-    from langchain_community.vectorstores import FAISS
-except ModuleNotFoundError:
-    from langchain.vectorstores import FAISS
-
-try:
-    from langchain_core.documents import Document
-except ModuleNotFoundError:
-    from langchain.schema import Document
-
-try:
-    from langchain_huggingface import HuggingFaceEmbeddings
-except ModuleNotFoundError:
-    from langchain.embeddings import HuggingFaceEmbeddings
-
 from config import (
     BGE3_MODEL_NAME,
     TOP_K,
@@ -30,6 +15,12 @@ from config import (
     RAG_RANDOM_SEED,
     RAG_USE_TRAIN_ONLY,
 )
+
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+from langchain_huggingface import HuggingFaceEmbeddings
+
+
 
 
 class LogVectorStore:
@@ -106,6 +97,10 @@ class LogVectorStore:
             pass
         return [text]
 
+    @staticmethod
+    def _normalize_template(template: str) -> str:
+        return str(template).strip()
+
     def _build_documents_from_grouped_logs(self) -> List[Document]:
         if not self.csv_path.exists():
             raise FileNotFoundError(f"未找到文件: {self.csv_path}")
@@ -117,21 +112,35 @@ class LogVectorStore:
             raise ValueError(f"grouped_logs.csv 缺少列: {sorted(missing_cols)}")
 
         df = self._split_df(df)
-        documents: List[Document] = []
-        
-        # 加了 tqdm 进度条
+        deduped_docs = {}
+
         for row in tqdm(df.itertuples(index=False), total=len(df), desc="📝 构建日志模板文档"):
             templates = self._parse_templates(getattr(row, "Templates", ""))
             label = getattr(row, "Label", None)
+            label_value = int(label) if pd.notna(label) else None
             for template in templates:
-                if template:
-                    documents.append(
-                        Document(
-                            page_content=template,
-                            metadata={"Label": int(label) if pd.notna(label) else None},
-                        )
-                    )
-        return documents
+                normalized = self._normalize_template(template)
+                if not normalized:
+                    continue
+
+                if normalized not in deduped_docs:
+                    deduped_docs[normalized] = {
+                        "page_content": normalized,
+                        "metadata": {
+                            "Label": label_value,
+                            "dup_count": 1,
+                        },
+                    }
+                else:
+                    meta = deduped_docs[normalized]["metadata"]
+                    meta["dup_count"] += 1
+                    if label_value is not None:
+                        meta["Label"] = int(max(meta["Label"] or 0, label_value))
+
+        return [
+            Document(page_content=item["page_content"], metadata=item["metadata"])
+            for item in deduped_docs.values()
+        ]
 
     def build_from_grouped_logs(self, force_rebuild: bool = False) -> int:
         if self.index_dir.exists() and not force_rebuild:
@@ -148,7 +157,7 @@ class LogVectorStore:
             raise ValueError(f"{self.csv_path} 中没有可用的 Templates")
 
         # 向量入库也加进度条
-        print(f"🚀 开始生成向量库 (共 {len(documents)} 条模板)...")
+        print(f"🚀 开始生成向量库 (去重后共 {len(documents)} 条模板)...")
         self.vector_db = FAISS.from_documents(documents, self.embedding)
 
         self.index_dir.mkdir(parents=True, exist_ok=True)
@@ -159,6 +168,11 @@ class LogVectorStore:
         if self.vector_db is None:
             self.build_from_grouped_logs()
         return self.vector_db.similarity_search(log, k=top_k)
+
+    def search_with_scores(self, log: str, top_k: int = TOP_K):
+        if self.vector_db is None:
+            self.build_from_grouped_logs()
+        return self.vector_db.similarity_search_with_score(log, k=top_k)
 
 
 def build_faiss_for_dataset(
@@ -192,6 +206,8 @@ if __name__ == "__main__":
         action="store_true",
         help="使用全量数据构建（默认仅训练集）",
     )
+    parser.add_argument("--query", default=None, help="本地测试检索的日志文本")
+    parser.add_argument("--top-k", type=int, default=TOP_K, help="检索返回条数")
     args = parser.parse_args()
 
     store = LogVectorStore(
@@ -205,3 +221,10 @@ if __name__ == "__main__":
     index_dir = store.index_dir
     print(f"\n✅ 向量库构建完成: {index_dir}")
     print(f"✅ 文档数量: {count}")
+
+    if args.query:
+        results = store.search_with_scores(args.query, top_k=args.top_k)
+        print("\n🔎 检索结果")
+        for i, (doc, score) in enumerate(results, start=1):
+            print(f"[{i}] score={score:.4f} label={doc.metadata.get('Label')} dup_count={doc.metadata.get('dup_count')}")
+            print(f"    {doc.page_content}")

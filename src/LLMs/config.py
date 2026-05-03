@@ -1,8 +1,12 @@
 import os
 
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+
 # ===================== LLM 配置 =====================
-LLM_TYPE = os.getenv("LLM_TYPE", "openai")  # mock / openai / ollama
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "xxx")
+LLM_TYPE = os.getenv("LLM_TYPE", "openai")  # openai / ollama
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-6742f45a4a1846fea1af386c2145d0be")
+# print(f"🔑 OpenAI API Key: {'*' * 4 + OPENAI_API_KEY[-4:]} (长度: {len(OPENAI_API_KEY
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
 

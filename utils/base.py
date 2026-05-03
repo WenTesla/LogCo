@@ -1,6 +1,7 @@
-import argparse
 import logging
+import os
 import re
+from types import SimpleNamespace
 
 
 logging.basicConfig(
@@ -11,26 +12,25 @@ logger = logging.getLogger("LogCo")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Log grouping preprocess")
-    parser.add_argument(
-        "--DATASET",
-        "--dataset",
-        dest="DATASET",
-        type=str,
-        default="BGL",
-        choices=["BGL", "HDFS", "Spirit", "Thunderbird"],
-        help="数据集名称，可选: BGL/HDFS/Spirit/Thunderbird",
+    dataset = os.getenv("DATASET", "BGL")
+    valid_datasets = {"BGL", "HDFS", "Spirit", "Thunderbird"}
+    if dataset not in valid_datasets:
+        raise ValueError(
+            f"DATASET={dataset} 非法，可选: {sorted(valid_datasets)}"
+        )
+
+    input_dir = os.getenv("INPUT_DIR", f"./inputs/{dataset}")
+    output_dir = os.getenv("OUTPUT_DIR", f"./outputs/{dataset}")
+    window_size = int(os.getenv("WINDOW_SIZE", "60"))
+    step_size = int(os.getenv("STEP_SIZE", "60"))
+
+    return SimpleNamespace(
+        DATASET=dataset,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        window_size=window_size,
+        step_size=step_size,
     )
-    parser.add_argument("--input_dir", type=str, default=None, help="输入目录")
-    parser.add_argument("--output_dir", type=str, default=None, help="输出目录")
-    parser.add_argument("--window_size", type=int, default=60, help="滑动窗口大小")
-    parser.add_argument("--step_size", type=int, default=60, help="滑动窗口步长")
-    args = parser.parse_args()
-    if args.input_dir is None:
-        args.input_dir = f"./inputs/{args.DATASET}"
-    if args.output_dir is None:
-        args.output_dir = f"./outputs/{args.DATASET}"
-    return args
 
 
 def BGL_regex(content: str) -> str:

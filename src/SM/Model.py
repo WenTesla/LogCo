@@ -38,12 +38,14 @@ def edl_loss(alpha, labels, num_classes=2, annealing=0.01):
     # 1. 核心损失
     loss = torch.sum(label_onehot * (torch.log(S) - torch.log(alpha)), dim=1)
 
-    # 2. KL 正则（论文原版，最简单最稳）
-    beta = torch.ones_like(alpha)
+    # 2. KL 正则（仅约束错误类别证据，不惩罚真实类别）
+    alpha_tilde = label_onehot + (1 - label_onehot) * alpha
+    S_tilde = torch.sum(alpha_tilde, dim=1, keepdim=True)
+    beta = torch.ones_like(alpha_tilde)
     S_b = beta.sum(1, keepdim=True)
-    kl = torch.lgamma(S).squeeze() - torch.lgamma(alpha).sum(1) \
+    kl = torch.lgamma(S_tilde).squeeze() - torch.lgamma(alpha_tilde).sum(1) \
          - torch.lgamma(S_b).squeeze() + torch.lgamma(beta).sum(1) \
-         + torch.sum((beta - 1) * (torch.digamma(alpha) - torch.digamma(S)), dim=1)
+         + torch.sum((alpha_tilde - beta) * (torch.digamma(alpha_tilde) - torch.digamma(S_tilde)), dim=1)
 
     # 3. 总和
     total_loss = loss + annealing * kl
