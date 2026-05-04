@@ -7,22 +7,22 @@
 略，将唯一日志级推理结果映射回样本级评估。实验流程支持高不确定子集与全测试集两种评测范围，并提供灵活的不确
 定样本决策策略。结果表明，不确定度与错误率具有显著相关性，级联机制能够在有限 LLM 成本下有效提升总体检测鲁棒
 性与实用性。本文框架具备良好的工程可复现性，可为生产环境中的高性价比日志异常检测提供参考。
-# 引言
-随着云原生架构与微服务系统的普及，在线服务每天产生海量异构日志。如何从高噪声、弱结构化的日志流中及时识别异
-常，是可观测性与智能运维的重要研究方向。现有方法大体分为两类：一类依赖传统机器学习或深度学习模型进行端到端
-分类，具备较高吞吐但在长尾模式、语义复杂异常和分布变化场景中易退化；另一类基于大语言模型进行语义推理，具有
-更强泛化能力，但直接应用于全量日志会引入较高计算与经济成本，且缺乏稳定的成本-性能平衡机制。
-针对上述问题，本文关注一个更具工程价值的问题设定：能否在保持高吞吐前提下，仅对“最难判”的样本使用更强模型，
-从而实现精度与成本的协同优化。基于这一动机，我们提出 LogCo，一种“小模型初筛 + 不确定样本二次检测”的级联日志
-异常检测框架。其核心思想是将模型能力按样本难度进行分配：由小模型处理绝大多数低风险样本，由 LLM 聚焦高不确定
-子集进行精细化判别。为使 LLM 决策更可控，本文采用 RAG 机制从知识库检索相似且带标签的历史日志作为证据上下
-文，缓解纯生成式判断中的幻觉与不稳定问题。
-与仅做模型堆叠的方案不同，本文在系统层面进一步考虑了可落地性。首先，我们使用 EDL 输出的不确定度作为路由信
-号，实证分析显示高不确定分组具有显著更高错误率，验证了“按不确定度分流”的有效性。其次，我们在二次检测阶段对
-高不确定样本进行日志文本去重，在保持样本级评估一致性的同时显著减少 LLM 调用次数。最后，我们提供覆盖高不确定
-子集与全测试集的统一评估协议，并支持多种不确定结果处理策略，以适配不同业务对漏报、误报和成本的偏好。
-本文贡献可概括为三点：
-1. 提出面向日志异常检测的级联框架，将 EDL 不确定度估计与 LLM-RAG 证据推理结合，实现按难度分配模型能力。
-2. 设计样本级与唯一日志级联动的二次检测流程，通过去重映射降低 LLM 调用成本并保持评估一致性。
-3. 构建可复现的端到端实验与评估管线，验证不确定度分流与级联决策在性能与成本间的有效权衡。
-本文其余部分将依次介绍方法设计、实验设置、结果分析与消融研究。
+# Introduction
+Log data is a primary source for monitoring, diagnosing, and maintaining modern large-scale software systems. As cloud-native and microservice architectures continue to evolve, log streams become increasingly noisy, heterogeneous, and dynamic, making anomaly detection both essential and challenging. In practice, log anomaly detection is often deployed under an open-world setting: new anomaly patterns, previously unseen normal behaviors, and distribution shifts may emerge after deployment, which limits the reliability of detectors trained on fixed patterns.
+
+Existing approaches can be broadly grouped into two categories. Small models, including traditional machine learning and deep learning-based detectors, are attractive for their efficiency and scalability, but they typically rely on relatively fixed representations and struggle with ambiguous, rare, or evolving patterns. In contrast, large language models (LLMs) exhibit strong contextual reasoning and generalization ability, making them promising for semantic log analysis. However, directly applying an LLM to all incoming logs is computationally expensive and operationally impractical, and pure prompting or fine-tuning alone does not provide a stable mechanism for balancing accuracy, latency, and cost in long-running systems.
+
+To address this trade-off, we study an efficient open-world log anomaly detection problem and propose LogCo, a collaborative framework that combines a small model with an LLM through uncertainty-aware routing and retrieval-augmented reasoning. The key idea is to let the small model handle easy samples efficiently, while escalating high-uncertainty cases to the LLM for deeper analysis. Specifically, the small model first estimates both the anomaly score and prediction uncertainty using evidential deep learning (EDL). The uncertainty score then serves as a routing signal: low-uncertainty samples are directly classified by the small model, whereas high-uncertainty samples are sent to the LLM.
+
+For the escalated samples, LogCo further equips the LLM with retrieval-augmented generation (RAG). A vector database stores historical logs, labels, and structured annotations, allowing the LLM to retrieve semantically related evidence before making a decision. This retrieval step grounds the LLM in concrete historical cases and helps reduce over-generalized or unsupported predictions. In addition, the vector database is only accessed during LLM reasoning, which preserves a clear separation between efficient first-stage inference and knowledge-intensive second-stage analysis.
+
+Beyond inference-time collaboration, LogCo introduces a feedback-driven learning loop for continual adaptation. High-confidence outputs from the LLM are stored as structured pseudo-labels and reused to update the knowledge base, while also serving as supervision signals for periodically distilling the small model. This design allows the system to gradually transfer knowledge from the LLM back to the efficient detector, reducing future LLM usage while improving coverage of emerging patterns.
+
+Our contributions are summarized as follows:
+
+1. We formulate open-world log anomaly detection as an efficient collaborative inference problem and propose an uncertainty-aware routing mechanism that dynamically allocates samples between a small model and an LLM.
+2. We design a retrieval-augmented reasoning module for difficult log samples, enabling the LLM to make evidence-grounded and context-aware predictions.
+3. We introduce a feedback-driven distillation framework that continuously transfers LLM knowledge back to the small model, supporting continual adaptation in evolving log environments.
+4. We conduct extensive experiments showing that LogCo substantially reduces LLM usage while maintaining or improving detection performance compared with strong baselines.
+
+Overall, this work provides a practical paradigm for open-world log anomaly detection by combining efficient first-stage filtering, LLM-based reasoning on difficult cases, and continual knowledge transfer across model scales.

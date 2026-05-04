@@ -12,3 +12,4 @@ bert_cache/
 codex.sh
 .env
 src/SM/checkpoints/
+.agents

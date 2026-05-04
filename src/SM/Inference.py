@@ -47,7 +47,7 @@ with torch.no_grad():
         S = torch.sum(alpha, dim=1, keepdim=True)
         prob = alpha / S
         pred = torch.argmax(prob, dim=1)
-        uncertainty = 2.0 / S.squeeze()
+        uncertainty = config.NUM_CLASSES / S.squeeze()
 
         # 保存结果
         all_preds.extend(pred.cpu().numpy())

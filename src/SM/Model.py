@@ -8,7 +8,7 @@ class BertEDL(nn.Module):
         self.num_classes = num_classes
 
         layers = []
-        prev_dim = input_dim  # 预提取 BERT 特征维度
+        prev_dim = input_dim  # 预提取编码器特征维度
         for hidden_dim in hidden_dims:
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),

@@ -1,5 +1,4 @@
 import argparse
-import ast
 from pathlib import Path
 from typing import List
 
@@ -39,9 +38,10 @@ class LogVectorStore:
         self.random_seed = random_seed
         self.use_train_only = use_train_only
         self.repo_root = Path(__file__).resolve().parents[2]
+        self.inputs_root = self.repo_root / "inputs"
         self.outputs_root = (self.repo_root / outputs_root).resolve()
         self.dataset_dir = self.outputs_root / self.dataset
-        self.csv_path = self.dataset_dir / "grouped_logs.csv"
+        self.csv_path = self.inputs_root / self.dataset / "structured.csv"
         self.index_dir = self.dataset_dir / self._build_index_dirname()
         self.embedding = HuggingFaceEmbeddings(
             model_name=BGE3_MODEL_NAME,
@@ -51,9 +51,9 @@ class LogVectorStore:
 
     def _build_index_dirname(self) -> str:
         if not self.use_train_only:
-            return f"{VECTOR_STORE_DIRNAME}_all"
+            return f"{VECTOR_STORE_DIRNAME}_structured_all"
         ratio_tag = str(self.train_ratio).replace(".", "p")
-        return f"{VECTOR_STORE_DIRNAME}_{self.split_mode}_{ratio_tag}_seed{self.random_seed}"
+        return f"{VECTOR_STORE_DIRNAME}_structured_{self.split_mode}_{ratio_tag}_seed{self.random_seed}"
 
     def _split_df(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.use_train_only:
@@ -81,61 +81,52 @@ class LogVectorStore:
         return split_df.reset_index(drop=True)
 
     @staticmethod
-    def _parse_templates(raw_templates) -> List[str]:
-        if isinstance(raw_templates, list):
-            return [str(item).strip() for item in raw_templates if str(item).strip()]
-        if pd.isna(raw_templates):
-            return []
-        text = str(raw_templates).strip()
-        if not text:
-            return []
-        try:
-            parsed = ast.literal_eval(text)
-            if isinstance(parsed, list):
-                return [str(item).strip() for item in parsed if str(item).strip()]
-        except Exception:
-            pass
-        return [text]
-
-    @staticmethod
     def _normalize_template(template: str) -> str:
         return str(template).strip()
 
-    def _build_documents_from_grouped_logs(self) -> List[Document]:
+    @staticmethod
+    def _normalize_label(raw_label):
+        if pd.isna(raw_label):
+            return None
+        text = str(raw_label).strip()
+        if not text:
+            return None
+        return 0 if text == "-" else 1
+
+    def _build_documents_from_structured_csv(self) -> List[Document]:
         if not self.csv_path.exists():
             raise FileNotFoundError(f"未找到文件: {self.csv_path}")
 
         df = pd.read_csv(self.csv_path)
-        required_cols = {"Templates", "Label"}
+        required_cols = {"EventTemplate"}
         missing_cols = required_cols - set(df.columns)
         if missing_cols:
-            raise ValueError(f"grouped_logs.csv 缺少列: {sorted(missing_cols)}")
+            raise ValueError(f"{self.csv_path} 缺少列: {sorted(missing_cols)}")
 
         df = self._split_df(df)
+        has_label_col = "Label" in df.columns
         deduped_docs = {}
 
         for row in tqdm(df.itertuples(index=False), total=len(df), desc="📝 构建日志模板文档"):
-            templates = self._parse_templates(getattr(row, "Templates", ""))
-            label = getattr(row, "Label", None)
-            label_value = int(label) if pd.notna(label) else None
-            for template in templates:
-                normalized = self._normalize_template(template)
-                if not normalized:
-                    continue
+            template = self._normalize_template(getattr(row, "EventTemplate", ""))
+            if not template:
+                continue
 
-                if normalized not in deduped_docs:
-                    deduped_docs[normalized] = {
-                        "page_content": normalized,
-                        "metadata": {
-                            "Label": label_value,
-                            "dup_count": 1,
-                        },
-                    }
-                else:
-                    meta = deduped_docs[normalized]["metadata"]
-                    meta["dup_count"] += 1
-                    if label_value is not None:
-                        meta["Label"] = int(max(meta["Label"] or 0, label_value))
+            label_value = self._normalize_label(getattr(row, "Label", None)) if has_label_col else None
+
+            if template not in deduped_docs:
+                deduped_docs[template] = {
+                    "page_content": template,
+                    "metadata": {
+                        "Label": label_value,
+                        "dup_count": 1,
+                    },
+                }
+            else:
+                meta = deduped_docs[template]["metadata"]
+                meta["dup_count"] += 1
+                if label_value is not None:
+                    meta["Label"] = int(max(meta["Label"] or 0, label_value))
 
         return [
             Document(page_content=item["page_content"], metadata=item["metadata"])
@@ -151,10 +142,10 @@ class LogVectorStore:
             )
             return self.vector_db.index.ntotal
 
-        print("🔨 开始读取并解析日志模板...")
-        documents = self._build_documents_from_grouped_logs()
+        print("🔨 开始读取并解析 structured.csv 中的 EventTemplate...")
+        documents = self._build_documents_from_structured_csv()
         if not documents:
-            raise ValueError(f"{self.csv_path} 中没有可用的 Templates")
+            raise ValueError(f"{self.csv_path} 中没有可用的 EventTemplate")
 
         # 向量入库也加进度条
         print(f"🚀 开始生成向量库 (去重后共 {len(documents)} 条模板)...")
@@ -195,7 +186,7 @@ def build_faiss_for_dataset(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="从 grouped_logs.csv 构建 BGE3 + FAISS 向量库")
+    parser = argparse.ArgumentParser(description="从 structured.csv 构建 BGE3 + FAISS 向量库")
     parser.add_argument("--dataset", default="BGL", help="数据集名称，例如 BGL/HDFS/Spirit/Thunderbird")
     parser.add_argument("--force-rebuild", action="store_true", help="强制重建向量库")
     parser.add_argument("--split-mode", default=RAG_SPLIT_MODE, choices=["ordered", "random"], help="切分方式")
@@ -222,6 +213,8 @@ if __name__ == "__main__":
     print(f"\n✅ 向量库构建完成: {index_dir}")
     print(f"✅ 文档数量: {count}")
 
+
+    # 测试python src/LLMs/vector_store.py --dataset BGL  --query "2023-09-15 12:00:00,000 ERROR ServiceX failed to connect to database" --top-k 5
     if args.query:
         results = store.search_with_scores(args.query, top_k=args.top_k)
         print("\n🔎 检索结果")

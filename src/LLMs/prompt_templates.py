@@ -14,24 +14,29 @@ Rules:
 - Return valid JSON only, with no extra text.
 """.strip()
 
+# 只输出二分类结果
 RAG_SYSTEM_PROMPT_BINARY = """
-You are a strict binary anomaly detection assistant for system logs.
-Your task is to determine whether the target log event is only:
-1) ANOMALY, or
-2) NORMAL.
+You are an expert in system log analysis and anomaly detection.
 
-Use:
-1) the target log,
-2) retrieved reference logs from a knowledge base,
-3) optional small-model score and uncertainty signals.
+# Task:
+Given a target a log sequence, your task is to determine whether it is ANOMALY or NORMAL using the following information:
+1) The log sequence is provided as a list of log templates, where dynamic variables are masked with `<*>`. 
+2) Retrieved reference logs from a knowledge base that are semantically similar to the target log.
 
-Rules:
-- Prioritize evidence from retrieved references.
-- Do not assume missing facts.
-- Do not output "UNCERTAIN" or any third class.
-- If evidence is weak, still choose the more likely class (ANOMALY or NORMAL).
-- Keep reasoning concise and evidence-based.
-- Return valid JSON only, with no extra text.
+# Rules:
+- Prioritize evidence from retrieved reference logs when making your decision.
+- Do not assume any facts that are not explicitly provided in the target log or retrieved references.
+- In the retrieved reference logs, label=0 indicates **NORMAL** and label=1 indicates **ANOMALY**.
+- When retrieved references conflict, weigh the most similar and most specific entries first.
+- If any single log entry in the sequence is anomalous, the entire log sequence is considered **anomalous**.
+- If the evidence is weak, conflicting, or insufficient to make a confident decision, choose "NORMAL".
+- Return a valid JSON object with the required fields, and do not include any extra text or formatting.
+
+# Output format:
+Return a JSON object with the following schema:
+{
+  "status": "ANOMALY|NORMAL"
+}
 """.strip()
 
 
@@ -68,29 +73,9 @@ RAG_USER_PROMPT_BINARY = """
 Target log event:
 {target_log}
 
-Small-model signals (optional):
-- score: {small_model_score}
-- uncertainty: {small_model_uncertainty}
-
-Retrieved references (top-k):
+Retrieved references (top-k, sorted by similarity descending):
 {retrieved_logs}
 
-Decision requirements:
-1) Compare target log with retrieved references by semantics, pattern, and severity.
-2) Return one of: "ANOMALY", "NORMAL".
-3) Provide confidence in [0,1].
-4) Provide short rationale.
-5) Provide supporting_refs as a list like ["R2","R5"].
-
-Return JSON with this exact schema:
-{{
-  "decision": "ANOMALY|NORMAL",
-  "confidence": 0.0,
-  "rationale": "short explanation",
-  "supporting_refs": ["R1","R2"],
-  "risk_type": "optional short type",
-  "recommended_action": "optional short action"
-}}
 """.strip()
 
 
@@ -103,7 +88,6 @@ Return one short query only.
 Target log:
 {target_log}
 """.strip()
-
 
 LOG_ANOMALY_PROMPT = """
 System instruction:
@@ -152,9 +136,9 @@ Summarize_System_Instruction = """
 You are an expert in system log analysis and anomaly detection.
 
 # Task:
-  Given a set of labeled log sequences, summarize the high-level semantic patterns of NORMAL and ANOMALOUS
-  system behaviors. Your goal is not to classify new logs, but to abstract the observed patterns into
-  reusable definitions that can later be used to construct anomaly detection prompts.
+Given a set of labeled log sequences, summarize the high-level semantic patterns of NORMAL and ANOMALOUS
+system behaviors. Your goal is not to classify new logs, but to abstract the observed patterns into
+reusable definitions that can later be used to construct anomaly detection prompts.
 
 # Input:
   You will be given two groups of log sequences:

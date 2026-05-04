@@ -5,7 +5,8 @@ import os
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 # ===================== SM 配置 =====================
-BERT_PATH = os.getenv("BERT_PATH", "bert-base-uncased")
+ROBERTA_PATH = os.getenv("ROBERTA_PATH", os.getenv("BERT_PATH", "roberta-base"))
+BERT_PATH = ROBERTA_PATH
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 DATASET = os.getenv("DATASET", "BGL") # BGL / HDFS / Thunderbird / Spirit
@@ -14,7 +15,7 @@ SAVE_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "checkpoints",
     DATASET,
-    "bert_edl_best.pth",
+    "roberta_edl_best.pth",
 )
 
 # ===================== 训练超参数 =====================

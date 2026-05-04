@@ -108,6 +108,7 @@ def _extract_content(result):
 
 
 def _parse_result(text: str):
+    # 解析结果，兼容 decision/status 和 confidence/level 两种表达方式
     try:
         parsed = json.loads(text)
     except Exception:
@@ -115,6 +116,11 @@ def _parse_result(text: str):
 
     decision = parsed.get("decision", "").lower()
     status = parsed.get("status")
+    if isinstance(status, str):
+        status = status.strip().lower()
+    else:
+        status = None
+
     if not status:
         if decision == "anomaly":
             status = "anomaly"
@@ -124,6 +130,10 @@ def _parse_result(text: str):
             status = "uncertain"
         else:
             status = "unknown"
+    elif status in {"0", "normal", "benign", "false", "ok"}:
+        status = "normal"
+    elif status in {"1", "anomaly", "anomalous", "true"}:
+        status = "anomaly"
 
     confidence = parsed.get("confidence", None)
     if isinstance(confidence, (int, float)):
@@ -181,10 +191,10 @@ def detect(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
-
+    # print(f"\n🧠 构造的提示词:\n{prompt}")
     # 3. LLM 调用
     result = llm.invoke(prompt)
-
+    # print(f"\n💡 LLM 输出原始结果:\n{_extract_content(result)}")
     # 4. 解析
     parsed = _parse_result(_extract_content(result))
     if verbose:

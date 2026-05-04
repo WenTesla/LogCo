@@ -4,7 +4,7 @@ from torch.utils.data import Dataset, random_split
 import ast
 import numpy as np
 from tqdm import tqdm
-from transformers import BertModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer
 from transformers.utils import logging as hf_logging
 import hashlib
 from pathlib import Path
@@ -48,12 +48,12 @@ class LogDataset(Dataset):
         # 关键优化：有缓存就直接加载，没有才提取
         # ==========================================
         if self.feat_cache.exists() and self.label_cache.exists():
-            print("✅ 从缓存加载 BERT 特征，秒加载！")
+            print("✅ 从缓存加载 RoBERTa 特征，秒加载！")
             self.features = torch.tensor(np.load(self.feat_cache), dtype=torch.float32)
             self.labels = np.load(self.label_cache).tolist()
         else:
-            print("⚡ 首次运行，提取 BERT 特征（优化版）...")
-            self.features = self._extract_bert_features_fast(
+            print("⚡ 首次运行，提取 RoBERTa 特征（平均池化版）...")
+            self.features = self._extract_roberta_features_fast(
                 texts=self.texts,
                 tokenizer=self.tokenizer,
                 bert_path=bert_path,
@@ -85,24 +85,24 @@ class LogDataset(Dataset):
         return str(value)
 
     @classmethod
-    def _extract_bert_features_fast(cls, texts, tokenizer, bert_path, max_len, batch_size, device):
+    def _extract_roberta_features_fast(cls, texts, tokenizer, bert_path, max_len, batch_size, device):
         # ==========================================
         # 速度优化核心
         # 1. 半精度 FP16
         # 2. 更大 batch
         # 3. tokenizer 并行
         # ==========================================
-        model = BertModel.from_pretrained(
+        model = AutoModel.from_pretrained(
             bert_path,
-            num_labels=0,
-            add_pooling_layer=True
-        ).to(device).half()
+        ).to(device)
+        if device.type == "cuda":
+            model = model.half()
         model.eval()
 
         features = []
 
         with torch.no_grad():
-            pbar = tqdm(range(0, len(texts), batch_size), desc="提取BERT特征")
+            pbar = tqdm(range(0, len(texts), batch_size), desc="提取RoBERTa特征")
             for i in pbar:
                 batch_texts = texts[i:i + batch_size]
                 enc = tokenizer(
@@ -114,7 +114,11 @@ class LogDataset(Dataset):
                 )
                 enc = {k: v.to(device) for k, v in enc.items()}
                 outputs = model(**enc)
-                pooled = outputs.pooler_output
+                last_hidden_state = outputs.last_hidden_state
+                attention_mask = enc["attention_mask"].unsqueeze(-1).type_as(last_hidden_state)
+                summed = (last_hidden_state * attention_mask).sum(dim=1)
+                counts = attention_mask.sum(dim=1).clamp(min=1e-9)
+                pooled = summed / counts
                 features.extend(pooled.cpu().numpy())
 
         return torch.tensor(np.array(features), dtype=torch.float32)
