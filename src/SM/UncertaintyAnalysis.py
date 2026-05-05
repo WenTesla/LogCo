@@ -118,9 +118,9 @@ save_low_path = os.path.join("outputs", config.DATASET, "results", "low_uncertai
 high_df.to_csv(save_high_path, index=False, encoding="utf-8")
 low_df.to_csv(save_low_path, index=False, encoding="utf-8")
 
-print(f"\n✅ 高不确定性样本已保存至：{save_high_path}")
+print(f"\n✅ 高不确定性样本已保存至 {save_high_path}")
 print(f"✅ 共保存 {len(high_df)} 条（前 {top_ratio * 100:.0f}% 不确定性最高样本）")
-print(f"✅ 低不确定性样本已保存至：{save_low_path}")
+print(f"✅ 低不确定性样本已保存至 {save_low_path}")
 print(f"✅ 共保存 {len(low_df)} 条（前 {top_ratio * 100:.0f}% 不确定性最低样本）")
 
 # ===================== 绘图 =====================

@@ -108,11 +108,11 @@ def evaluate_split(df: pd.DataFrame, train_ratio: float, mode: str, seed: int) -
     train_texts = train_df["log_text"].tolist()
     test_texts = test_df["log_text"].tolist()
 
-    train_templates = set(train_texts)
-    test_templates = set(test_texts)
+    unique_train_logs = set(train_texts)
+    test_unique_logs = set(test_texts)
 
-    overlap_templates = train_templates & test_templates
-    unseen_templates = test_templates - train_templates
+    overlap_templates = unique_train_logs & test_unique_logs
+    unseen_templates = test_unique_logs - unique_train_logs
 
     train_token_counter = _build_token_counter(train_texts)
     test_token_counter = _build_token_counter(test_texts)
@@ -135,10 +135,15 @@ def evaluate_split(df: pd.DataFrame, train_ratio: float, mode: str, seed: int) -
 
     return {
         "mode": mode,
+        "total_windows": n,
         "train_size": len(train_df),
         "test_size": len(test_df),
-        "template_overlap_rate": _safe_div(len(overlap_templates), len(test_templates)),
-        "test_unseen_template_rate": _safe_div(len(unseen_templates), len(test_templates)),
+        "train_templates": len(unique_train_logs),
+        "test_templates": len(test_unique_logs),
+        "unseen_test_templates": len(unseen_templates),
+        "unseen_template_ratio": _safe_div(len(unseen_templates), len(test_unique_logs)),
+        "template_overlap_rate": _safe_div(len(overlap_templates), len(test_unique_logs)),
+        "test_unseen_template_rate": _safe_div(len(unseen_templates), len(test_unique_logs)),
         "token_vocab_overlap_rate": _safe_div(len(train_vocab & test_vocab), len(test_vocab)),
         "test_unseen_token_ratio": _safe_div(unseen_test_token_count, total_test_tokens),
         "token_js_divergence": _js_divergence_from_counters(train_token_counter, test_token_counter),
@@ -211,3 +216,67 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+# ================ OOD Split Validation ================
+# CSV            : outputs/BGL/grouped_logs.csv
+# Samples        : 78558
+# Train Ratio    : 0.7
+# Random Seed    : 42
+
+# [ORDERED]
+# Train/Test                     : 54990 / 23568
+# Test模板在Train出现比例         : 8.05%
+# Test未见模板比例                : 91.95%
+# Test词表在Train覆盖率           : 15.93%
+# Test未见词Token占比             : 21.04%
+# Train/Test词分布JS散度          : 0.2894
+# Train异常率 / Test异常率        : 9.55% / 9.53%
+
+# [RANDOM]
+# Train/Test                     : 54990 / 23568
+# Test模板在Train出现比例         : 41.44%
+# Test未见模板比例                : 58.56%
+# Test词表在Train覆盖率           : 51.63%
+# Test未见词Token占比             : 0.37%
+# Train/Test词分布JS散度          : 0.0054
+# Train异常率 / Test异常率        : 9.63% / 9.35%
+
+# ---------------- Interpretation ----------------
+# 若 ORDERED 相比 RANDOM 出现：
+# 1) 更高的 Test未见模板比例 / 未见词占比
+# 2) 更低的 模板重叠率 / 词表覆盖率
+# 3) 更高的 JS 散度
+# 则可认为 ORDERED 划分更可能存在分布外(OOD)问题。
+
+# ================ OOD Split Validation ================
+# CSV            : outputs/Spirit/grouped_logs.csv
+# Samples        : 83333
+# Train Ratio    : 0.7
+# Random Seed    : 42
+
+# [ORDERED]
+# Train/Test                     : 58333 / 25000
+# Test模板在Train出现比例         : 10.47%
+# Test未见模板比例                : 89.53%
+# Test词表在Train覆盖率           : 75.55%
+# Test未见词Token占比             : 0.19%
+# Train/Test词分布JS散度          : 0.1463
+# Train异常率 / Test异常率        : 50.76% / 2.41%
+
+# [RANDOM]
+# Train/Test                     : 58333 / 25000
+# Test模板在Train出现比例         : 27.98%
+# Test未见模板比例                : 72.02%
+# Test词表在Train覆盖率           : 76.99%
+# Test未见词Token占比             : 0.04%
+# Train/Test词分布JS散度          : 0.0009
+# Train异常率 / Test异常率        : 36.17% / 36.46%
+
+# ---------------- Interpretation ----------------
+# 若 ORDERED 相比 RANDOM 出现：
+# 1) 更高的 Test未见模板比例 / 未见词占比
+# 2) 更低的 模板重叠率 / 词表覆盖率
+# 3) 更高的 JS 散度
+# 则可认为 ORDERED 划分更可能存在分布外(OOD)问题。

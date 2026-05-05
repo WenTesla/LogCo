@@ -86,5 +86,7 @@ df_result = pd.DataFrame({
 
 # 保存全测试集结果（用于级联全量评估）
 save_full_pred_path = os.path.join("outputs", config.DATASET, "results", "sm_test_predictions.csv")
+if not os.path.exists(os.path.dirname(save_full_pred_path)):
+    os.makedirs(os.path.dirname(save_full_pred_path))
 df_result.to_csv(save_full_pred_path, index=False, encoding="utf-8")
 print(f"✅ 全测试集预测已保存至：{save_full_pred_path}")

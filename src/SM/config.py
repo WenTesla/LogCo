@@ -33,5 +33,5 @@ TRAIN_RATIO = float(os.getenv("TRAIN_RATIO", os.getenv("RAG_TRAIN_RATIO", "0.7")
 RANDOM_SEED = int(os.getenv("RANDOM_SEED", os.getenv("RAG_RANDOM_SEED", "42")))
 
 # ===================== 其他 =====================
-TOP_RATIO = float(os.getenv("TOP_RATIO", "0.2"))
+TOP_RATIO = float(os.getenv("TOP_RATIO", "0.1"))
 top_ratio = TOP_RATIO  # backward compatibility
