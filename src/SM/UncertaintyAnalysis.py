@@ -17,12 +17,22 @@ full_dataset = LogDataset(
     batch_size=config.FEATURE_BATCH_SIZE,
     device=config.DEVICE,
 )
-_, test_dataset = full_dataset.split(
+train_dataset, val_dataset, test_dataset = full_dataset.split_train_val_test(
     mode=config.SPLIT_MODE,
     train_ratio=config.TRAIN_RATIO,
+    val_ratio=config.VAL_RATIO,
+    test_ratio=config.TEST_RATIO,
     random_seed=config.RANDOM_SEED,
 )
-test_loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
+split_map = {
+    "train": train_dataset,
+    "val": val_dataset,
+    "test": test_dataset,
+}
+if config.UNCERTAINTY_SPLIT not in split_map:
+    raise ValueError("UNCERTAINTY_SPLIT must be train/val/test")
+uncertainty_dataset = split_map[config.UNCERTAINTY_SPLIT]
+test_loader = DataLoader(uncertainty_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
 
 model = BertEDL(num_classes=config.NUM_CLASSES).to(config.DEVICE)
 model.load_state_dict(torch.load(config.SAVE_MODEL_PATH, map_location=config.DEVICE))
@@ -93,7 +103,7 @@ for i, er in enumerate(error_rates):
     )
 
 # ===================== 导出高/低不确定样本 =====================
-test_indices = test_dataset.indices
+test_indices = uncertainty_dataset.indices
 source_df = pd.read_csv(config.GROUPED_LOGS_PATH)
 all_templates = [source_df.loc[i, "Templates"] for i in test_indices]
 
@@ -113,11 +123,30 @@ topk = int(len(df_result) * top_ratio)
 high_df = df_result.sort_values(by="Uncertainty", ascending=False).head(topk)
 low_df = df_result.sort_values(by="Uncertainty", ascending=True).head(topk)
 
-save_high_path = os.path.join("outputs", config.DATASET, "results", "high_uncertain_samples.csv")
-save_low_path = os.path.join("outputs", config.DATASET, "results", "low_uncertain_samples.csv")
+save_pred_path = os.path.join(
+    "outputs",
+    config.DATASET,
+    "results",
+    f"{config.UNCERTAINTY_SPLIT}_sm_predictions.csv",
+)
+save_high_path = os.path.join(
+    "outputs",
+    config.DATASET,
+    "results",
+    f"{config.UNCERTAINTY_SPLIT}_high_uncertain_samples.csv",
+)
+save_low_path = os.path.join(
+    "outputs",
+    config.DATASET,
+    "results",
+    f"{config.UNCERTAINTY_SPLIT}_low_uncertain_samples.csv",
+)
+os.makedirs(os.path.dirname(save_high_path), exist_ok=True)
+df_result.to_csv(save_pred_path, index=False, encoding="utf-8")
 high_df.to_csv(save_high_path, index=False, encoding="utf-8")
 low_df.to_csv(save_low_path, index=False, encoding="utf-8")
 
+print(f"\n✅ {config.UNCERTAINTY_SPLIT} 集预测已保存至 {save_pred_path}")
 print(f"\n✅ 高不确定性样本已保存至 {save_high_path}")
 print(f"✅ 共保存 {len(high_df)} 条（前 {top_ratio * 100:.0f}% 不确定性最高样本）")
 print(f"✅ 低不确定性样本已保存至 {save_low_path}")
@@ -128,9 +157,15 @@ plt.figure(figsize=(7,4))
 group_labels = [f"G{i+1}" for i in range(num_groups)]
 bar_colors = plt.cm.viridis(np.linspace(0.1, 0.9, num_groups))
 plt.bar(group_labels, error_rates, color=bar_colors)
-plt.title(f"{config.DATASET} Uncertainty vs Error Rate")
+plt.title(f"{config.DATASET} {config.UNCERTAINTY_SPLIT} Uncertainty vs Error Rate")
 plt.ylabel("Error Rate (%)")
 plt.xlabel("Uncertainty Group")
 plt.tight_layout()
-plt.savefig(os.path.join("outputs", config.DATASET,"results", f"{config.DATASET}_unc_error.png"))
-print(f"✅ 不确定性分析图已保存至 {os.path.join('outputs', config.DATASET,'results', f'{config.DATASET}_unc_error.png')}")
+plot_path = os.path.join(
+    "outputs",
+    config.DATASET,
+    "results",
+    f"{config.DATASET}_{config.UNCERTAINTY_SPLIT}_unc_error.png",
+)
+plt.savefig(plot_path)
+print(f"✅ 不确定性分析图已保存至 {plot_path}")

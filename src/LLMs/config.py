@@ -1,5 +1,7 @@
 import os
+from dotenv import load_dotenv
 
+# load_dotenv()
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 
@@ -7,10 +9,13 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 LLM_TYPE = os.getenv("LLM_TYPE", "openai")  # openai / ollama
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-xxx")
 # print(f"🔑 OpenAI API Key: {'*' * 4 + OPENAI_API_KEY[-4:]} (长度: {len(OPENAI_API_KEY
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com") # ollama 模式下不使用
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash") 
 
-OLLAMA_MODEL = "llama3:8b"
+# modelscope.cn/Qwen/Qwen3-14B-GGUF
+# modelscope.cn/Qwen/Qwen3-30B-A3B-GGUF:latest
+
+OLLAMA_MODEL = "modelscope.cn/Qwen/Qwen3-14B-GGUF"
 OLLAMA_BASE_URL = "http://localhost:11434"
 TOP_K = 3
 
@@ -20,7 +25,7 @@ DATASET = os.getenv("DATASET", "BGL")
 BGE3_MODEL_NAME = os.getenv("BGE3_MODEL_NAME", "BAAI/bge-small-en-v1.5")
 VECTOR_STORE_DIRNAME = os.getenv("VECTOR_STORE_DIRNAME", "faiss_bge3")
 RAG_SPLIT_MODE = os.getenv("RAG_SPLIT_MODE", "ordered")  # ordered / random
-RAG_TRAIN_RATIO = float(os.getenv("RAG_TRAIN_RATIO", "0.7"))
+RAG_TRAIN_RATIO = float(os.getenv("RAG_TRAIN_RATIO", "0.5"))
 RAG_RANDOM_SEED = int(os.getenv("RAG_RANDOM_SEED", "42"))
 RAG_USE_TRAIN_ONLY = os.getenv("RAG_USE_TRAIN_ONLY", "true").lower() == "true"
 

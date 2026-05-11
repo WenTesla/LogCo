@@ -16,17 +16,28 @@ full_dataset = LogDataset(
     batch_size=config.FEATURE_BATCH_SIZE,
     device=config.DEVICE,
 )
-train_dataset, test_dataset = full_dataset.split(
+train_dataset, val_dataset, test_dataset = full_dataset.split_train_val_test(
     mode=config.SPLIT_MODE,
     train_ratio=config.TRAIN_RATIO,
+    val_ratio=config.VAL_RATIO,
+    test_ratio=config.TEST_RATIO,
     random_seed=config.RANDOM_SEED,
 )
-test_loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
+split_map = {
+    "train": train_dataset,
+    "val": val_dataset,
+    "test": test_dataset,
+}
+if config.INFERENCE_SPLIT not in split_map:
+    raise ValueError("INFERENCE_SPLIT must be train/val/test")
+eval_dataset = split_map[config.INFERENCE_SPLIT]
+test_loader = DataLoader(eval_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
 
 # ===================== 加载模型 =====================
 model = BertEDL(num_classes=config.NUM_CLASSES).to(config.DEVICE)
-model.load_state_dict(torch.load(config.SAVE_MODEL_PATH, map_location=config.DEVICE))
+model.load_state_dict(torch.load(config.INFERENCE_MODEL_PATH, map_location=config.DEVICE))
 model.eval()
+print(f"✅ 加载模型: {config.INFERENCE_MODEL_PATH}")
 
 # ===================== 存储结果 =====================
 all_preds = []
@@ -36,7 +47,7 @@ all_uncertainties = []
 all_templates = []
 
 # ===================== 推理（带进度条） =====================
-print("\n🚀 日志异常检测推理中...")
+print(f"\n🚀 日志异常检测推理中，评估切分: {config.INFERENCE_SPLIT}")
 with torch.no_grad():
     pbar = tqdm(test_loader, desc="Testing")
     for batch in pbar:
@@ -55,8 +66,8 @@ with torch.no_grad():
         all_probs.extend(prob[:, 1].cpu().numpy())
         all_uncertainties.extend(uncertainty.cpu().numpy())
 
-# 取出测试集原始日志模板
-test_indices = test_dataset.indices
+# 取出评估集原始日志模板
+test_indices = eval_dataset.indices
 df = pd.read_csv(config.GROUPED_LOGS_PATH)
 all_templates = [df.loc[i, "Templates"] for i in test_indices]
 
@@ -84,9 +95,10 @@ df_result = pd.DataFrame({
     "Uncertainty": all_uncertainties
 })
 
-# 保存全测试集结果（用于级联全量评估）
-save_full_pred_path = os.path.join("outputs", config.DATASET, "results", "sm_test_predictions.csv")
-if not os.path.exists(os.path.dirname(save_full_pred_path)):
-    os.makedirs(os.path.dirname(save_full_pred_path))
+# 保存评估集结果
+save_full_pred_path = config.INFERENCE_OUTPUT_CSV
+save_full_pred_dir = os.path.dirname(save_full_pred_path)
+if save_full_pred_dir and not os.path.exists(save_full_pred_dir):
+    os.makedirs(save_full_pred_dir)
 df_result.to_csv(save_full_pred_path, index=False, encoding="utf-8")
-print(f"✅ 全测试集预测已保存至：{save_full_pred_path}")
+print(f"✅ {config.INFERENCE_SPLIT} 集预测已保存至 {save_full_pred_path}")

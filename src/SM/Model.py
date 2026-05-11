@@ -31,7 +31,7 @@ class BertEDL(nn.Module):
         return alpha
 
 
-def edl_loss(alpha, labels, num_classes=2, annealing=0.01):
+def edl_loss(alpha, labels, num_classes=2, annealing=0.01, sample_weight=None):
     S = torch.sum(alpha, dim=1, keepdim=True)
     label_onehot = torch.nn.functional.one_hot(labels, num_classes).float()
 
@@ -49,4 +49,15 @@ def edl_loss(alpha, labels, num_classes=2, annealing=0.01):
 
     # 3. 总和
     total_loss = loss + annealing * kl
-    return total_loss.mean()
+    if sample_weight is None:
+        return total_loss.mean()
+
+    sample_weight = sample_weight.to(device=total_loss.device, dtype=total_loss.dtype).view(-1)
+    if sample_weight.numel() != total_loss.numel():
+        raise ValueError(
+            f"sample_weight size mismatch: got {sample_weight.numel()}, "
+            f"expected {total_loss.numel()}"
+        )
+
+    weight_sum = sample_weight.sum().clamp_min(1e-12)
+    return (total_loss * sample_weight).sum() / weight_sum

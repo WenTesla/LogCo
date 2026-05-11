@@ -124,12 +124,31 @@ python src/LLMs/main.py --dataset Spirit --decision-mode binary
 - `llm_second_pass_high_uncertain_unique.csv`（去重粒度）
 - `llm_second_pass_high_uncertain.csv`（映射回样本粒度）
 
+全测试集 LLM+RAG 消融实验：
+
+```bash
+python src/LLMs/main.py --dataset Spirit --scope full_test --decision-mode binary
+```
+
+产物（`outputs/<DATASET>/results/`）：
+- `llm_full_test_rag_unique.csv`（去重粒度）
+- `llm_full_test_rag.csv`（映射回样本粒度）
+
 6. 级联评估
 
 全测试集级联评估（推荐）：
 
 ```bash
 python src/evaluate_cascade.py --dataset Spirit --scope full_test
+```
+
+全测试集 LLM+RAG 消融结果评估：
+
+```bash
+python src/evaluate_cascade.py \
+  --dataset Spirit \
+  --scope full_test \
+  --llm-csv outputs/Spirit/results/llm_full_test_rag.csv
 ```
 
 仅高不确定子集评估：

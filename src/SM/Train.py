@@ -17,9 +17,11 @@ full_dataset = LogDataset(
     batch_size=config.FEATURE_BATCH_SIZE,
     device=config.DEVICE,
 )
-train_dataset, test_dataset = full_dataset.split(
+train_dataset, _, _ = full_dataset.split_train_val_test(
     mode=config.SPLIT_MODE,
     train_ratio=config.TRAIN_RATIO,
+    val_ratio=config.VAL_RATIO,
+    test_ratio=config.TEST_RATIO,
     random_seed=config.RANDOM_SEED,
 )
 

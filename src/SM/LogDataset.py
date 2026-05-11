@@ -180,3 +180,47 @@ class LogDataset(Dataset):
             return train_dataset, test_dataset
         else:
             raise ValueError("mode must be random/ordered")
+
+    def split_train_val_test(
+        self,
+        mode="ordered",
+        train_ratio=0.5,
+        val_ratio=0.2,
+        test_ratio=0.3,
+        random_seed=42,
+    ):
+        dataset_size = len(self)
+        print(f"数据集总样本数: {dataset_size}")
+        if mode not in {"random", "ordered"}:
+            raise ValueError("mode must be random/ordered")
+        if min(train_ratio, val_ratio, test_ratio) < 0:
+            raise ValueError("train/val/test ratio must be non-negative")
+
+        ratio_sum = train_ratio + val_ratio + test_ratio
+        if abs(ratio_sum - 1.0) > 1e-6:
+            raise ValueError(f"train/val/test ratio must sum to 1.0, got {ratio_sum}")
+
+        train_size = int(dataset_size * train_ratio)
+        val_size = int(dataset_size * val_ratio)
+        test_size = dataset_size - train_size - val_size
+
+        if train_size <= 0 or val_size <= 0 or test_size <= 0:
+            raise ValueError(
+                f"切分后存在空数据集: train={train_size}, val={val_size}, test={test_size}"
+            )
+
+        if mode == "random":
+            print(
+                f"🔀 随机三分数据集: train={train_ratio}, val={val_ratio}, "
+                f"test={test_ratio}, random_seed={random_seed}"
+            )
+            generator = torch.Generator().manual_seed(int(random_seed))
+            return random_split(self, [train_size, val_size, test_size], generator=generator)
+
+        print(f"📊 有序三分数据集: train={train_ratio}, val={val_ratio}, test={test_ratio}")
+        train_end = train_size
+        val_end = train_end + val_size
+        train_dataset = torch.utils.data.Subset(self, range(0, train_end))
+        val_dataset = torch.utils.data.Subset(self, range(train_end, val_end))
+        test_dataset = torch.utils.data.Subset(self, range(val_end, dataset_size))
+        return train_dataset, val_dataset, test_dataset

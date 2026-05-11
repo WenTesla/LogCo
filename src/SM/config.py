@@ -29,9 +29,42 @@ ANNEALING = float(os.getenv("ANNEALING", "0.01"))
 
 # ===================== 划分策略（与 LLM/RAG 对齐） =====================
 SPLIT_MODE = os.getenv("SPLIT_MODE", os.getenv("RAG_SPLIT_MODE", "ordered")) # ordered / random
-TRAIN_RATIO = float(os.getenv("TRAIN_RATIO", os.getenv("RAG_TRAIN_RATIO", "0.7")))
+TRAIN_RATIO = float(os.getenv("TRAIN_RATIO", os.getenv("RAG_TRAIN_RATIO", "0.5")))
+VAL_RATIO = float(os.getenv("VAL_RATIO", os.getenv("RAG_VAL_RATIO", "0.2")))
+TEST_RATIO = float(os.getenv("TEST_RATIO", os.getenv("RAG_TEST_RATIO", "0.3")))
 RANDOM_SEED = int(os.getenv("RANDOM_SEED", os.getenv("RAG_RANDOM_SEED", "42")))
+UNCERTAINTY_SPLIT = os.getenv("UNCERTAINTY_SPLIT", "val") # val / test
+INFERENCE_SPLIT = os.getenv("INFERENCE_SPLIT", "test") # train / val / test
+INFERENCE_MODEL_PATH = os.getenv("INFERENCE_MODEL_PATH", SAVE_MODEL_PATH)
+INFERENCE_OUTPUT_CSV = os.getenv(
+    "INFERENCE_OUTPUT_CSV",
+    os.path.join("outputs", DATASET, "results", f"{INFERENCE_SPLIT}_sm_predictions.csv"),
+)
 
 # ===================== 其他 =====================
 TOP_RATIO = float(os.getenv("TOP_RATIO", "0.1"))
 top_ratio = TOP_RATIO  # backward compatibility
+
+# ===================== 增量微调配置 =====================
+INCREMENTAL_LLM_CSV = os.getenv(
+    "INCREMENTAL_LLM_CSV",
+    os.path.join("outputs", DATASET, "results", "llm_second_pass_val_high_uncertain.csv"),
+)
+INCREMENTAL_BASE_MODEL_PATH = os.getenv("INCREMENTAL_BASE_MODEL_PATH", SAVE_MODEL_PATH)
+INCREMENTAL_SAVE_MODEL_PATH = os.getenv(
+    "INCREMENTAL_SAVE_MODEL_PATH",
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "checkpoints",
+        DATASET,
+        "roberta_edl_incremental.pth",
+    ),
+)
+INCREMENTAL_EPOCHS = int(os.getenv("INCREMENTAL_EPOCHS", "5"))
+INCREMENTAL_LR = float(os.getenv("INCREMENTAL_LR", "2e-6"))
+INCREMENTAL_REPLAY_RATIO = float(os.getenv("INCREMENTAL_REPLAY_RATIO", "3.0"))
+INCREMENTAL_MIN_REPLAY = int(os.getenv("INCREMENTAL_MIN_REPLAY", "1000"))
+INCREMENTAL_MAX_REPLAY = int(os.getenv("INCREMENTAL_MAX_REPLAY", "10000"))
+INCREMENTAL_REPLAY_WEIGHT = float(os.getenv("INCREMENTAL_REPLAY_WEIGHT", "1.0"))
+INCREMENTAL_FEEDBACK_WEIGHT = float(os.getenv("INCREMENTAL_FEEDBACK_WEIGHT", "0.5"))
+INCREMENTAL_CONFLICT_ONLY = os.getenv("INCREMENTAL_CONFLICT_ONLY", "false").lower() == "true"
