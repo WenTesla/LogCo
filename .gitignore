@@ -13,3 +13,4 @@ codex.sh
 .env
 src/SM/checkpoints/
 .agents
+*.zip

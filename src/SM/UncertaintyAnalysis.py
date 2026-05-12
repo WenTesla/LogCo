@@ -74,6 +74,7 @@ error_rates = []
 group_counts = []
 group_correct_counts = []
 group_error_counts = []
+group_confusion = []
 for g in range(num_groups):
     mask = groups == g
     cnt = int(mask.sum())
@@ -82,6 +83,7 @@ for g in range(num_groups):
         group_correct_counts.append(0)
         group_error_counts.append(0)
         error_rates.append(0.0)
+        group_confusion.append({"tn": 0, "fp": 0, "fn": 0, "tp": 0})
         continue
 
     correct_cnt = int(cor[mask].sum())
@@ -90,6 +92,17 @@ for g in range(num_groups):
     group_error_counts.append(error_cnt)
     acc = cor[mask].mean()
     error_rates.append(100 * (1 - acc))
+
+    labels_g = np.array(all_labels)[mask]
+    preds_g = np.array(all_preds)[mask]
+    group_confusion.append(
+        {
+            "tn": int(((labels_g == 0) & (preds_g == 0)).sum()),
+            "fp": int(((labels_g == 0) & (preds_g == 1)).sum()),
+            "fn": int(((labels_g == 1) & (preds_g == 0)).sum()),
+            "tp": int(((labels_g == 1) & (preds_g == 1)).sum()),
+        }
+    )
 
 # ===================== 输出 =====================
 print("\n==========================================")
@@ -100,6 +113,14 @@ for i, er in enumerate(error_rates):
     print(
         f" G{i+1:<1}    | {group_counts[i]:7d} | {ratio:7.2f} | "
         f"{group_correct_counts[i]:7d} | {group_error_counts[i]:5d} | {er:12.2f}%"
+    )
+
+print("\n==========================================")
+print(" Group | TN(Label0 Pred0) | FP(Label0 Pred1) | FN(Label1 Pred0) | TP(Label1 Pred1)")
+for i, cm in enumerate(group_confusion):
+    print(
+        f" G{i+1:<2}   | {cm['tn']:16d} | {cm['fp']:16d} | "
+        f"{cm['fn']:16d} | {cm['tp']:16d}"
     )
 
 # ===================== 导出高/低不确定样本 =====================
@@ -120,7 +141,9 @@ df_result = pd.DataFrame(
 
 top_ratio = float(config.TOP_RATIO)
 topk = int(len(df_result) * top_ratio)
-high_df = df_result.sort_values(by="Uncertainty", ascending=False).head(topk)
+highest_group_id = int(groups.max()) if len(groups) > 0 else -1
+df_result["UncertaintyGroup"] = groups + 1
+high_df = df_result[df_result["UncertaintyGroup"] == highest_group_id + 1].copy()
 low_df = df_result.sort_values(by="Uncertainty", ascending=True).head(topk)
 
 save_pred_path = os.path.join(
@@ -148,7 +171,7 @@ low_df.to_csv(save_low_path, index=False, encoding="utf-8")
 
 print(f"\n✅ {config.UNCERTAINTY_SPLIT} 集预测已保存至 {save_pred_path}")
 print(f"\n✅ 高不确定性样本已保存至 {save_high_path}")
-print(f"✅ 共保存 {len(high_df)} 条（前 {top_ratio * 100:.0f}% 不确定性最高样本）")
+print(f"✅ 共保存 {len(high_df)} 条（最高不确定度分组 G{highest_group_id + 1}）")
 print(f"✅ 低不确定性样本已保存至 {save_low_path}")
 print(f"✅ 共保存 {len(low_df)} 条（前 {top_ratio * 100:.0f}% 不确定性最低样本）")
 
