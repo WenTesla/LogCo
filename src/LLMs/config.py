@@ -18,17 +18,31 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
 OLLAMA_MODEL = "modelscope.cn/Qwen/Qwen3-30B-A3B-GGUF:latest"
 OLLAMA_BASE_URL = "http://localhost:11434"
 TOP_K = 3
+RULE_TOP_K = int(os.getenv("RULE_TOP_K", "3"))
+RULE_RAG_ENABLED = os.getenv("RULE_RAG_ENABLED", "true").lower() == "true"
+RAG_CONTEXT_MODE = os.getenv(
+    "RAG_CONTEXT_MODE",
+    "hybrid" if RULE_RAG_ENABLED else "history_only",
+).strip().lower()  # history_only / rule_only / hybrid
+RULES_DIR = os.getenv(
+    "RULES_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules"),
+)
 
 # ===================== RAG 配置 =====================
 DATASET = os.getenv("DATASET", "BGL")
 # BGE3_MODEL_NAME = os.getenv("BGE3_MODEL_NAME", "BAAI/bge-m3")
 BGE3_MODEL_NAME = os.getenv("BGE3_MODEL_NAME", "BAAI/bge-small-en-v1.5")
 VECTOR_STORE_DIRNAME = os.getenv("VECTOR_STORE_DIRNAME", "faiss_bge3")
-RAG_VECTOR_SOURCE = os.getenv("RAG_VECTOR_SOURCE", "grouped")  # grouped / structured
+RAG_VECTOR_SOURCE = os.getenv("RAG_VECTOR_SOURCE", "structured")  # grouped / structured
 RAG_SPLIT_MODE = os.getenv("RAG_SPLIT_MODE", "ordered")  # ordered / random
 RAG_TRAIN_RATIO = float(os.getenv("RAG_TRAIN_RATIO", "0.5"))
 RAG_RANDOM_SEED = int(os.getenv("RAG_RANDOM_SEED", "42"))
 RAG_USE_TRAIN_ONLY = os.getenv("RAG_USE_TRAIN_ONLY", "true").lower() == "true"
 
+# ===================== SM 结果输入配置 =====================
+UNCERTAINTY_SPLIT = os.getenv("UNCERTAINTY_SPLIT", "test").strip()
+HIGH_UNCERTAIN_CSV_PATH = os.getenv("HIGH_UNCERTAIN_CSV_PATH", "").strip()
+
 # 二次检测决策模式：triage(正常/异常/不确定) 或 binary(仅正常/异常)
-DECISION_MODE = os.getenv("DECISION_MODE", "triage").strip().lower()
+DECISION_MODE = os.getenv("DECISION_MODE", "binary").strip().lower()

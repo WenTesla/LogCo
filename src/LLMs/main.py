@@ -2,92 +2,60 @@ import json
 import ast
 from pathlib import Path
 import argparse
-import requests
 import pandas as pd
 from tqdm import tqdm
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
 from prompt_templates import (
     LOG_ANOMALY_PROMPT,
-    RAG_SYSTEM_PROMPT,
-    RAG_USER_PROMPT,
     RAG_SYSTEM_PROMPT_BINARY,
+    RAG_SYSTEM_PROMPT_BINARY_RULE_ONLY,
+    RAG_SYSTEM_PROMPT_BINARY_WITH_RULES,
     RAG_USER_PROMPT_BINARY,
+    RAG_USER_PROMPT_BINARY_RULE_ONLY,
+    RAG_USER_PROMPT_BINARY_WITH_RULES,
 )
+from rule_store import RuleStore, format_rules_for_prompt
 from vector_store import LogVectorStore
 from config import (
     DATASET,
     DECISION_MODE,
+    HIGH_UNCERTAIN_CSV_PATH,
     LLM_TYPE,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
     OPENAI_MODEL,
     OLLAMA_MODEL,
     OLLAMA_BASE_URL,
+    RAG_CONTEXT_MODE,
+    UNCERTAINTY_SPLIT,
 )
-
-
-class HTTPChatLLM:
-    def __init__(self, api_key: str, base_url: str, model: str, temperature: float = 0.0):
-        self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.temperature = temperature
-
-    def invoke(self, prompt: str):
-        response = requests.post(
-            f"{self.base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": self.temperature,
-                "thinking": {"type": "disabled"},
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        usage = data.get("usage") or {}
-        return type(
-            "HTTPResponse",
-            (),
-            {
-                "content": content,
-                "usage_metadata": {
-                    "input_tokens": usage.get("prompt_tokens"),
-                    "output_tokens": usage.get("completion_tokens"),
-                    "total_tokens": usage.get("total_tokens"),
-                },
-                "response_metadata": {"token_usage": usage},
-            },
-        )()
 
 
 def get_llm():
     if LLM_TYPE == "openai":
         if not OPENAI_API_KEY:
             raise ValueError("缺少 OPENAI_API_KEY，请先设置环境变量。")
-        try:
-            from langchain_openai import ChatOpenAI
+        from openai import OpenAI
 
-            return ChatOpenAI(
-                api_key=OPENAI_API_KEY,
-                base_url=OPENAI_BASE_URL,
+        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+
+        def invoke(prompt: str):
+            response = client.chat.completions.create(
                 model=OPENAI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
             )
-        except ModuleNotFoundError:
-            return HTTPChatLLM(
-                api_key=OPENAI_API_KEY,
-                base_url=OPENAI_BASE_URL,
-                model=OPENAI_MODEL,
-                temperature=0.0,
-            )
+            r = response
+            return type(
+                "_Response",
+                (),
+                {
+                    "content": r.choices[0].message.content,
+                },
+            )()
+
+        return type("OpenAILLM", (), {"invoke": invoke})()
     if LLM_TYPE == "ollama":
         from langchain_ollama import OllamaLLM
         print(f"🔧 使用 Ollama 模型: {OLLAMA_MODEL}，请确保 Ollama 服务已启动并加载该模型。")
@@ -101,6 +69,26 @@ def get_llm():
 # 初始化
 llm = get_llm()
 _VECTOR_DB_CACHE = {}
+_RULE_STORE_CACHE = {}
+VALID_RAG_CONTEXT_MODES = {"history_only", "rule_only", "hybrid"}
+
+
+def _normalize_rag_context_mode(mode: str = RAG_CONTEXT_MODE) -> str:
+    normalized = str(mode).strip().lower()
+    if normalized not in VALID_RAG_CONTEXT_MODES:
+        raise ValueError(
+            "RAG_CONTEXT_MODE must be one of "
+            f"{sorted(VALID_RAG_CONTEXT_MODES)}, got {mode!r}"
+        )
+    return normalized
+
+
+def _uses_history(mode: str) -> bool:
+    return mode in {"history_only", "hybrid"}
+
+
+def _uses_rules(mode: str) -> bool:
+    return mode in {"rule_only", "hybrid"}
 
 
 def _get_vector_db(dataset: str) -> LogVectorStore:
@@ -112,85 +100,20 @@ def _get_vector_db(dataset: str) -> LogVectorStore:
     return _VECTOR_DB_CACHE[dataset]
 
 
+def _get_rule_store(dataset: str) -> RuleStore:
+    if dataset not in _RULE_STORE_CACHE:
+        store = RuleStore(dataset=dataset)
+        print(f"✅ 已加载规则库: dataset={dataset}, 规则数={len(store.rules)}")
+        _RULE_STORE_CACHE[dataset] = store
+    return _RULE_STORE_CACHE[dataset]
+
+
 def _extract_content(result):
     if isinstance(result, str):
         return result
     if hasattr(result, "content"):
         return result.content
     return str(result)
-
-
-def _safe_int(value):
-    if value is None:
-        return 0
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _estimate_tokens(text: str, model: str = OPENAI_MODEL) -> int:
-    text = "" if text is None else str(text)
-    try:
-        import tiktoken
-
-        try:
-            encoding = tiktoken.encoding_for_model(model)
-        except KeyError:
-            encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
-    except Exception:
-        # 粗略兜底：英文日志通常接近 4 chars/token，避免后端无 usage 时完全缺失。
-        return max(1, (len(text) + 3) // 4) if text else 0
-
-
-def _normalize_token_usage(raw_usage: dict | None):
-    raw_usage = raw_usage or {}
-    prompt_tokens = _safe_int(
-        raw_usage.get("prompt_tokens")
-        or raw_usage.get("input_tokens")
-        or raw_usage.get("prompt_eval_count")
-    )
-    completion_tokens = _safe_int(
-        raw_usage.get("completion_tokens")
-        or raw_usage.get("output_tokens")
-        or raw_usage.get("eval_count")
-    )
-    total_tokens = _safe_int(raw_usage.get("total_tokens"))
-    if total_tokens == 0:
-        total_tokens = prompt_tokens + completion_tokens
-
-    return {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
-        "token_usage_source": "api",
-    }
-
-
-def _extract_token_usage(result, prompt: str, completion: str):
-    usage = None
-    usage_metadata = getattr(result, "usage_metadata", None)
-    if isinstance(usage_metadata, dict):
-        usage = usage_metadata
-
-    response_metadata = getattr(result, "response_metadata", None)
-    if not usage and isinstance(response_metadata, dict):
-        usage = response_metadata.get("token_usage") or response_metadata.get("usage")
-
-    if usage:
-        normalized = _normalize_token_usage(usage)
-        if normalized["total_tokens"] > 0:
-            return normalized
-
-    prompt_tokens = _estimate_tokens(prompt)
-    completion_tokens = _estimate_tokens(completion)
-    return {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-        "token_usage_source": "estimated",
-    }
 
 
 def _parse_result(text: str):
@@ -304,34 +227,57 @@ def _apply_precision_guard(parsed: dict, diagnostics: dict, decision_mode: str) 
 
 def detect(
     log: str,
-    vector_db: LogVectorStore,
+    vector_db: LogVectorStore | None = None,
+    rule_store: RuleStore | None = None,
     small_model_score: str = "N/A",
     small_model_uncertainty: str = "N/A",
     verbose: bool = True,
     decision_mode: str = DECISION_MODE,
+    rag_context_mode: str = RAG_CONTEXT_MODE,
 ):
+    rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
     if verbose:
         print("\n" + "="*60)
         print(f"日志：{log}")
 
-    # 1. 检索相似日志
-    docs = vector_db.search(log)
+    # 1. 按消融模式检索历史日志和/或规则
+    if _uses_history(rag_context_mode):
+        if vector_db is None:
+            raise ValueError(f"{rag_context_mode} mode requires vector_db")
+        docs = vector_db.search(log)
+    else:
+        docs = []
     diagnostics = _retrieval_diagnostics(docs)
     context = "\n".join(
         [f"[R{i+1}] label={d.metadata.get('Label')}, text=\"{d.page_content}\"" for i, d in enumerate(docs)]
     )
+    if _uses_rules(rag_context_mode):
+        rule_store = rule_store or _get_rule_store(DATASET)
+        retrieved_rules = rule_store.search(log)
+        rule_context = format_rules_for_prompt(retrieved_rules)
+    else:
+        retrieved_rules = []
+        rule_context = ""
 
     # 2. 构造提示词
     mode = str(decision_mode).strip().lower()
     if mode == "binary":
-        system_prompt = RAG_SYSTEM_PROMPT_BINARY
-        user_prompt_template = RAG_USER_PROMPT_BINARY
+        if rag_context_mode == "history_only":
+            system_prompt = RAG_SYSTEM_PROMPT_BINARY
+            user_prompt_template = RAG_USER_PROMPT_BINARY
+        elif rag_context_mode == "rule_only":
+            system_prompt = RAG_SYSTEM_PROMPT_BINARY_RULE_ONLY
+            user_prompt_template = RAG_USER_PROMPT_BINARY_RULE_ONLY
+        else:
+            system_prompt = RAG_SYSTEM_PROMPT_BINARY_WITH_RULES
+            user_prompt_template = RAG_USER_PROMPT_BINARY_WITH_RULES
     else:
-        system_prompt = RAG_SYSTEM_PROMPT
-        user_prompt_template = RAG_USER_PROMPT
+        system_prompt = ""
+        user_prompt_template = ""
 
     user_prompt = user_prompt_template.format(
         retrieved_logs=context,
+        retrieved_rules=rule_context,
         target_log=log,
         small_model_score=small_model_score,
         small_model_uncertainty=small_model_uncertainty,
@@ -344,31 +290,26 @@ def detect(
     # 3. LLM 调用
     result = llm.invoke(prompt)
     content = _extract_content(result)
-    token_usage = _extract_token_usage(result, prompt, content)
     # print(f"\n💡 LLM 输出原始结果:\n{content}")
     # 4. 解析
     parsed = _parse_result(content)
-    parsed = _apply_precision_guard(parsed, diagnostics, decision_mode=decision_mode)
-    parsed["token_usage"] = token_usage
+    if _uses_history(rag_context_mode):
+        parsed = _apply_precision_guard(parsed, diagnostics, decision_mode=decision_mode)
     parsed["retrieval"] = diagnostics
+    parsed["rules"] = retrieved_rules
+    parsed["rag_context_mode"] = rag_context_mode
     if verbose:
         print(f"异常状态：{parsed['status']}")
         print(f"等级：{parsed['level']}")
         print(f"原因：{parsed['reason']}")
         print(f"建议：{parsed['suggestion']}")
         print(
-            "Token消耗："
-            f"prompt={token_usage['prompt_tokens']}, "
-            f"completion={token_usage['completion_tokens']}, "
-            f"total={token_usage['total_tokens']}, "
-            f"source={token_usage['token_usage_source']}"
-        )
-        print(
             "检索标签："
             f"normal={diagnostics['retrieved_normal_count']}, "
             f"anomaly={diagnostics['retrieved_anomaly_count']}, "
             f"unknown={diagnostics['retrieved_unknown_count']}"
         )
+        print(f"命中规则：{[rule['rule_id'] for rule in retrieved_rules]}")
     return parsed
 
 
@@ -389,22 +330,29 @@ def _templates_to_text(raw_value):
         pass
     return text
 
+# ===================== 主流程 =====================
 
 def _resolve_uncertain_csv_path(dataset: str) -> Path:
-    candidates = [
-        Path("outputs") / dataset / "results" / "val_high_uncertain_samples.csv",
-        Path("outputs") / dataset / "results" / "val_high_uncertain.csv",
-        Path("outputs") / dataset / "result" / "hign_uncertain.csv",
-        Path("outputs") / dataset / "results" / "hign_uncertain.csv",
-        Path("outputs") / dataset / "result" / "high_uncertain.csv",
-        Path("outputs") / dataset / "results" / "high_uncertain.csv",
-        Path("outputs") / dataset / "results" / "high_uncertain_samples.csv",
-    ]
-    for path in candidates:
-        if path.exists():
-            return path
+    if HIGH_UNCERTAIN_CSV_PATH:
+        path = Path(
+            HIGH_UNCERTAIN_CSV_PATH.format(
+                dataset=dataset,
+                split=UNCERTAINTY_SPLIT,
+            )
+        )
+    else:
+        path = (
+            Path("outputs")
+            / dataset
+            / "results"
+            / f"{UNCERTAINTY_SPLIT}_high_uncertain_samples.csv"
+        )
+
+    if path.exists():
+        return path
     raise FileNotFoundError(
-        f"未找到高不确定样本文件，请确认以下路径之一存在：{[str(p) for p in candidates]}"
+        f"未找到高不确定样本文件: {path}。"
+        "请先运行 src/SM/UncertaintyAnalysis.py，或通过 HIGH_UNCERTAIN_CSV_PATH 注入路径。"
     )
 
 
@@ -424,12 +372,14 @@ def _resolve_full_test_csv_path(dataset: str) -> Path:
 
 def _run_llm_rag_on_df(
     df: pd.DataFrame,
-    vector_db: LogVectorStore,
+    vector_db: LogVectorStore | None,
     dataset: str,
     decision_mode: str,
     output_prefix: str,
     input_csv: Path,
+    rag_context_mode: str = RAG_CONTEXT_MODE,
 ):
+    rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
     if "Templates" not in df.columns:
         raise ValueError(f"{input_csv} 缺少 Templates 列")
 
@@ -457,20 +407,24 @@ def _run_llm_rag_on_df(
         }
     )
 
+    rule_store = _get_rule_store(dataset) if _uses_rules(rag_context_mode) else None
     results = []
     pbar = tqdm(unique_df.itertuples(index=False), total=len(unique_df), desc="LLM+RAG检测(去重后)")
     for row in pbar:
         parsed = detect(
             row.log_text,
             vector_db=vector_db,
+            rule_store=rule_store,
             small_model_score=str(row.small_model_score_mean),
             small_model_uncertainty=str(row.small_model_uncertainty_mean),
             verbose=False,
             decision_mode=decision_mode,
+            rag_context_mode=rag_context_mode,
         )
         results.append(
             {
                 "log_text": row.log_text,
+                "rag_context_mode": parsed["rag_context_mode"],
                 "llm_status": parsed["status"],
                 "llm_level": parsed["level"],
                 "llm_reason": parsed["reason"],
@@ -480,10 +434,11 @@ def _run_llm_rag_on_df(
                 "retrieved_anomaly_count": parsed["retrieval"]["retrieved_anomaly_count"],
                 "retrieved_unknown_count": parsed["retrieval"]["retrieved_unknown_count"],
                 "retrieved_refs": json.dumps(parsed["retrieval"]["retrieved_refs"], ensure_ascii=False),
-                "llm_prompt_tokens": parsed["token_usage"]["prompt_tokens"],
-                "llm_completion_tokens": parsed["token_usage"]["completion_tokens"],
-                "llm_total_tokens": parsed["token_usage"]["total_tokens"],
-                "llm_token_usage_source": parsed["token_usage"]["token_usage_source"],
+                "retrieved_rule_ids": json.dumps(
+                    [rule["rule_id"] for rule in parsed["rules"]],
+                    ensure_ascii=False,
+                ),
+                "retrieved_rules": json.dumps(parsed["rules"], ensure_ascii=False),
             }
         )
 
@@ -495,6 +450,7 @@ def _run_llm_rag_on_df(
             [
                 "log_text",
                 "dup_count",
+                "rag_context_mode",
                 "llm_status",
                 "llm_level",
                 "llm_reason",
@@ -504,10 +460,8 @@ def _run_llm_rag_on_df(
                 "retrieved_anomaly_count",
                 "retrieved_unknown_count",
                 "retrieved_refs",
-                "llm_prompt_tokens",
-                "llm_completion_tokens",
-                "llm_total_tokens",
-                "llm_token_usage_source",
+                "retrieved_rule_ids",
+                "retrieved_rules",
             ]
         ],
         on="log_text",
@@ -529,15 +483,6 @@ def _run_llm_rag_on_df(
     print(f"✅ 去重后请求数: {len(unique_result_df)} / 原始样本数: {len(df)}")
     print(f"✅ 结果已保存: {out_csv}")
     print(f"✅ 去重结果已保存: {unique_out_csv}")
-    print(
-        "✅ Token消耗(按实际LLM请求汇总): "
-        f"prompt={int(unique_result_df['llm_prompt_tokens'].sum())}, "
-        f"completion={int(unique_result_df['llm_completion_tokens'].sum())}, "
-        f"total={int(unique_result_df['llm_total_tokens'].sum())}"
-    )
-    source_counts = unique_result_df["llm_token_usage_source"].value_counts().to_dict()
-    print(f"✅ Token统计来源: {source_counts}")
-
     # 如包含标签则输出二次检测指标（按原始样本级）
     if "Label" in df_out.columns:
         metric_df = df_out.dropna(subset=["llm_pred"]).copy()
@@ -561,22 +506,37 @@ def _run_llm_rag_on_df(
     return df_out, unique_result_df
 
 
-def second_pass_for_high_uncertain(dataset: str = DATASET, decision_mode: str = DECISION_MODE):
-    vector_db = _get_vector_db(dataset)
+def second_pass_for_high_uncertain(
+    dataset: str = DATASET,
+    decision_mode: str = DECISION_MODE,
+    rag_context_mode: str = RAG_CONTEXT_MODE,
+):
+    rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
+    vector_db = _get_vector_db(dataset) if _uses_history(rag_context_mode) else None
     input_csv = _resolve_uncertain_csv_path(dataset)
     df = pd.read_csv(input_csv)
+    print(
+        f"✅ 发现高不确定样本文件: {input_csv}，共 {len(df)} 条样本，"
+        f"RAG_CONTEXT_MODE={rag_context_mode}。"
+    )
     return _run_llm_rag_on_df(
         df=df,
         vector_db=vector_db,
         dataset=dataset,
         decision_mode=decision_mode,
-        output_prefix="llm_second_pass_val_high_uncertain",
+        output_prefix=f"llm_second_pass_{UNCERTAINTY_SPLIT}_high_uncertain_{rag_context_mode}",
         input_csv=input_csv,
+        rag_context_mode=rag_context_mode,
     )
 
 
-def full_test_llm_rag(dataset: str = DATASET, decision_mode: str = DECISION_MODE):
-    vector_db = _get_vector_db(dataset)
+def full_test_llm_rag(
+    dataset: str = DATASET,
+    decision_mode: str = DECISION_MODE,
+    rag_context_mode: str = RAG_CONTEXT_MODE,
+):
+    rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
+    vector_db = _get_vector_db(dataset) if _uses_history(rag_context_mode) else None
     input_csv = _resolve_full_test_csv_path(dataset)
     df = pd.read_csv(input_csv)
     return _run_llm_rag_on_df(
@@ -584,8 +544,9 @@ def full_test_llm_rag(dataset: str = DATASET, decision_mode: str = DECISION_MODE
         vector_db=vector_db,
         dataset=dataset,
         decision_mode=decision_mode,
-        output_prefix="llm_full_test_rag",
+        output_prefix=f"llm_full_test_rag_{rag_context_mode}",
         input_csv=input_csv,
+        rag_context_mode=rag_context_mode,
     )
 
 
@@ -604,8 +565,22 @@ if __name__ == "__main__":
         choices=["triage", "binary"],
         help="triage=正常/异常/不确定, binary=仅正常/异常",
     )
+    parser.add_argument(
+        "--rag-context-mode",
+        default=RAG_CONTEXT_MODE,
+        choices=sorted(VALID_RAG_CONTEXT_MODES),
+        help="history_only=仅历史日志RAG, rule_only=仅规则RAG, hybrid=规则+历史日志RAG",
+    )
     args = parser.parse_args()
     if args.scope == "full_test":
-        full_test_llm_rag(dataset=args.dataset, decision_mode=args.decision_mode)
+        full_test_llm_rag(
+            dataset=args.dataset,
+            decision_mode=args.decision_mode,
+            rag_context_mode=args.rag_context_mode,
+        )
     else:
-        second_pass_for_high_uncertain(dataset=args.dataset, decision_mode=args.decision_mode)
+        second_pass_for_high_uncertain(
+            dataset=args.dataset,
+            decision_mode=args.decision_mode,
+            rag_context_mode=args.rag_context_mode,
+        )

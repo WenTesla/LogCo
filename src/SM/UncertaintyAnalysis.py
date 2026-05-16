@@ -158,21 +158,14 @@ save_high_path = os.path.join(
     "results",
     f"{config.UNCERTAINTY_SPLIT}_high_uncertain_samples.csv",
 )
-save_low_path = os.path.join(
-    "outputs",
-    config.DATASET,
-    "results",
-    f"{config.UNCERTAINTY_SPLIT}_low_uncertain_samples.csv",
-)
+
 os.makedirs(os.path.dirname(save_high_path), exist_ok=True)
 df_result.to_csv(save_pred_path, index=False, encoding="utf-8")
 high_df.to_csv(save_high_path, index=False, encoding="utf-8")
-low_df.to_csv(save_low_path, index=False, encoding="utf-8")
 
 print(f"\n✅ {config.UNCERTAINTY_SPLIT} 集预测已保存至 {save_pred_path}")
 print(f"\n✅ 高不确定性样本已保存至 {save_high_path}")
 print(f"✅ 共保存 {len(high_df)} 条（最高不确定度分组 G{highest_group_id + 1}）")
-print(f"✅ 低不确定性样本已保存至 {save_low_path}")
 print(f"✅ 共保存 {len(low_df)} 条（前 {top_ratio * 100:.0f}% 不确定性最低样本）")
 
 # ===================== 绘图 =====================

@@ -6,6 +6,9 @@ from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
+import torch
+
+import config
 
 
 def _templates_to_text(value) -> str:
@@ -25,22 +28,43 @@ def _templates_to_text(value) -> str:
     return text
 
 
-def _split_indices(n: int, train_ratio: float, mode: str, seed: int) -> Tuple[np.ndarray, np.ndarray]:
+def _split_indices(
+    n: int,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+    mode: str,
+    seed: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if mode not in {"ordered", "random"}:
+        raise ValueError("mode 必须是 ordered 或 random")
+    if min(train_ratio, val_ratio, test_ratio) < 0:
+        raise ValueError("train/val/test ratio 必须非负")
+
+    ratio_sum = train_ratio + val_ratio + test_ratio
+    if abs(ratio_sum - 1.0) > 1e-6:
+        raise ValueError(f"train/val/test ratio 之和必须为 1.0，当前为 {ratio_sum}")
+
     train_size = int(n * train_ratio)
-    if train_size <= 0 or train_size >= n:
-        raise ValueError(f"非法 train_ratio={train_ratio}，当前样本数={n}")
+    val_size = int(n * val_ratio)
+    test_size = n - train_size - val_size
+    if train_size <= 0 or val_size <= 0 or test_size <= 0:
+        raise ValueError(
+            f"切分后存在空数据集: train={train_size}, val={val_size}, test={test_size}"
+        )
 
     if mode == "ordered":
         train_idx = np.arange(0, train_size)
-        test_idx = np.arange(train_size, n)
-    elif mode == "random":
-        rng = np.random.default_rng(seed)
-        perm = rng.permutation(n)
-        train_idx = np.sort(perm[:train_size])
-        test_idx = np.sort(perm[train_size:])
-    else:
-        raise ValueError("mode 必须是 ordered 或 random")
-    return train_idx, test_idx
+        val_idx = np.arange(train_size, train_size + val_size)
+        test_idx = np.arange(train_size + val_size, n)
+        return train_idx, val_idx, test_idx
+
+    generator = torch.Generator().manual_seed(int(seed))
+    perm = torch.randperm(n, generator=generator).numpy()
+    train_idx = perm[:train_size]
+    val_idx = perm[train_size:train_size + val_size]
+    test_idx = perm[train_size + val_size:]
+    return train_idx, val_idx, test_idx
 
 
 def _safe_div(a: float, b: float) -> float:
@@ -99,57 +123,79 @@ def _js_divergence_from_counters(c1: Counter, c2: Counter) -> float:
     return float(0.5 * (kl_pm + kl_qm))
 
 
-def evaluate_split(df: pd.DataFrame, train_ratio: float, mode: str, seed: int) -> dict:
-    n = len(df)
-    train_idx, test_idx = _split_indices(n, train_ratio, mode, seed)
-    train_df = df.iloc[train_idx]
-    test_df = df.iloc[test_idx]
+def evaluate_pair(
+    df: pd.DataFrame,
+    source_idx: np.ndarray,
+    target_idx: np.ndarray,
+    mode: str,
+    comparison: str,
+) -> dict:
+    source_df = df.iloc[source_idx]
+    target_df = df.iloc[target_idx]
 
-    train_texts = train_df["log_text"].tolist()
-    test_texts = test_df["log_text"].tolist()
+    source_texts = source_df["log_text"].tolist()
+    target_texts = target_df["log_text"].tolist()
 
-    unique_train_logs = set(train_texts)
-    test_unique_logs = set(test_texts)
+    unique_source_logs = set(source_texts)
+    target_unique_logs = set(target_texts)
 
-    overlap_templates = unique_train_logs & test_unique_logs
-    unseen_templates = test_unique_logs - unique_train_logs
+    overlap_patterns = unique_source_logs & target_unique_logs
+    unseen_patterns = target_unique_logs - unique_source_logs
 
-    train_token_counter = _build_token_counter(train_texts)
-    test_token_counter = _build_token_counter(test_texts)
-    train_vocab = set(train_token_counter.keys())
-    test_vocab = set(test_token_counter.keys())
+    source_token_counter = _build_token_counter(source_texts)
+    target_token_counter = _build_token_counter(target_texts)
+    source_vocab = set(source_token_counter.keys())
+    target_vocab = set(target_token_counter.keys())
 
-    unseen_test_tokens = test_vocab - train_vocab
-    unseen_test_token_count = sum(test_token_counter[t] for t in unseen_test_tokens)
-    total_test_tokens = sum(test_token_counter.values())
+    unseen_target_tokens = target_vocab - source_vocab
+    unseen_target_token_count = sum(target_token_counter[t] for t in unseen_target_tokens)
+    total_target_tokens = sum(target_token_counter.values())
 
     label_col_exists = "Label" in df.columns
     if label_col_exists:
-        train_pos = int(_label_to_binary(train_df["Label"]).sum())
-        test_pos = int(_label_to_binary(test_df["Label"]).sum())
-        train_pos_rate = _safe_div(train_pos, len(train_df))
-        test_pos_rate = _safe_div(test_pos, len(test_df))
+        source_pos = int(_label_to_binary(source_df["Label"]).sum())
+        target_pos = int(_label_to_binary(target_df["Label"]).sum())
+        source_pos_rate = _safe_div(source_pos, len(source_df))
+        target_pos_rate = _safe_div(target_pos, len(target_df))
     else:
-        train_pos_rate = None
-        test_pos_rate = None
+        source_pos_rate = None
+        target_pos_rate = None
 
     return {
         "mode": mode,
-        "total_windows": n,
-        "train_size": len(train_df),
-        "test_size": len(test_df),
-        "train_templates": len(unique_train_logs),
-        "test_templates": len(test_unique_logs),
-        "unseen_test_templates": len(unseen_templates),
-        "unseen_template_ratio": _safe_div(len(unseen_templates), len(test_unique_logs)),
-        "template_overlap_rate": _safe_div(len(overlap_templates), len(test_unique_logs)),
-        "test_unseen_template_rate": _safe_div(len(unseen_templates), len(test_unique_logs)),
-        "token_vocab_overlap_rate": _safe_div(len(train_vocab & test_vocab), len(test_vocab)),
-        "test_unseen_token_ratio": _safe_div(unseen_test_token_count, total_test_tokens),
-        "token_js_divergence": _js_divergence_from_counters(train_token_counter, test_token_counter),
-        "train_pos_rate": train_pos_rate,
-        "test_pos_rate": test_pos_rate,
+        "comparison": comparison,
+        "source_size": len(source_df),
+        "target_size": len(target_df),
+        "source_patterns": len(unique_source_logs),
+        "target_patterns": len(target_unique_logs),
+        "unseen_target_patterns": len(unseen_patterns),
+        "pattern_overlap_rate": _safe_div(len(overlap_patterns), len(target_unique_logs)),
+        "target_unseen_pattern_rate": _safe_div(len(unseen_patterns), len(target_unique_logs)),
+        "token_vocab_overlap_rate": _safe_div(len(source_vocab & target_vocab), len(target_vocab)),
+        "target_unseen_token_ratio": _safe_div(unseen_target_token_count, total_target_tokens),
+        "token_js_divergence": _js_divergence_from_counters(source_token_counter, target_token_counter),
+        "source_pos_rate": source_pos_rate,
+        "target_pos_rate": target_pos_rate,
     }
+
+
+def evaluate_split(
+    df: pd.DataFrame,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+    mode: str,
+    seed: int,
+) -> List[dict]:
+    train_idx, val_idx, test_idx = _split_indices(
+        len(df), train_ratio, val_ratio, test_ratio, mode, seed
+    )
+    train_val_idx = np.concatenate([train_idx, val_idx])
+    return [
+        evaluate_pair(df, train_idx, val_idx, mode, "train -> val"),
+        evaluate_pair(df, train_idx, test_idx, mode, "train -> test"),
+        evaluate_pair(df, train_val_idx, test_idx, mode, "train+val -> test"),
+    ]
 
 
 def _fmt_pct(x):
@@ -159,15 +205,34 @@ def _fmt_pct(x):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="验证 ordered 划分是否引入 OOD")
-    parser.add_argument("--dataset", default="BGL", help="数据集名称，例如 BGL/HDFS/Spirit/Thunderbird")
+    parser = argparse.ArgumentParser(
+        description="按 SM config 的 train/val/test 切分验证 ordered/random 是否引入 OOD"
+    )
+    parser.add_argument(
+        "--dataset",
+        default=config.DATASET,
+        help="数据集名称，例如 BGL/HDFS/Spirit/Thunderbird；默认读取 config.DATASET",
+    )
     parser.add_argument(
         "--csv-path",
         default=None,
         help="CSV 路径；不传时自动检测 output(s)/input(s) 下的 grouped_logs.csv 或 structured.csv",
     )
-    parser.add_argument("--train-ratio", type=float, default=0.7, help="训练集比例")
-    parser.add_argument("--random-seed", type=int, default=42, help="随机划分种子")
+    parser.add_argument(
+        "--split-mode",
+        choices=["ordered", "random", "both"],
+        default=config.SPLIT_MODE,
+        help="切分模式；默认读取 config.SPLIT_MODE",
+    )
+    parser.add_argument("--train-ratio", type=float, default=config.TRAIN_RATIO, help="训练集比例")
+    parser.add_argument("--val-ratio", type=float, default=config.VAL_RATIO, help="验证集比例")
+    parser.add_argument("--test-ratio", type=float, default=config.TEST_RATIO, help="测试集比例")
+    parser.add_argument("--random-seed", type=int, default=config.RANDOM_SEED, help="随机划分种子")
+    parser.add_argument(
+        "--compare-both",
+        action="store_true",
+        help="额外同时输出 ordered 和 random，便于比较时间顺序切分与随机切分的 OOD 差异",
+    )
     args = parser.parse_args()
 
     if args.csv_path:
@@ -186,97 +251,50 @@ def main():
     else:
         df["log_text"] = df["EventTemplate"].apply(_templates_to_text)
 
-    ordered_result = evaluate_split(df, args.train_ratio, "ordered", args.random_seed)
-    random_result = evaluate_split(df, args.train_ratio, "random", args.random_seed)
+    if args.compare_both or args.split_mode == "both":
+        modes = ["ordered", "random"]
+    else:
+        modes = [args.split_mode]
 
     print("\n================ OOD Split Validation ================")
     print(f"CSV            : {csv_path}")
     print(f"Samples        : {len(df)}")
-    print(f"Train Ratio    : {args.train_ratio}")
+    print(f"Split Mode     : {args.split_mode}")
+    print(f"Train/Val/Test : {args.train_ratio} / {args.val_ratio} / {args.test_ratio}")
     print(f"Random Seed    : {args.random_seed}")
+    print("Pattern Metric : unique normalized template sequence / window text")
 
-    for r in [ordered_result, random_result]:
-        print(f"\n[{r['mode'].upper()}]")
-        print(f"Train/Test                     : {r['train_size']} / {r['test_size']}")
-        print(f"Test模板在Train出现比例         : {_fmt_pct(r['template_overlap_rate'])}")
-        print(f"Test未见模板比例                : {_fmt_pct(r['test_unseen_template_rate'])}")
-        print(f"Test词表在Train覆盖率           : {_fmt_pct(r['token_vocab_overlap_rate'])}")
-        print(f"Test未见词Token占比             : {_fmt_pct(r['test_unseen_token_ratio'])}")
-        print(f"Train/Test词分布JS散度          : {r['token_js_divergence']:.4f}")
-        if r["train_pos_rate"] is not None:
-            print(f"Train异常率 / Test异常率        : {_fmt_pct(r['train_pos_rate'])} / {_fmt_pct(r['test_pos_rate'])}")
+    for mode in modes:
+        results = evaluate_split(
+            df,
+            args.train_ratio,
+            args.val_ratio,
+            args.test_ratio,
+            mode,
+            args.random_seed,
+        )
+        print(f"\n[{mode.upper()}]")
+        for r in results:
+            print(f"\n{r['comparison']}")
+            print(f"Source/Target                  : {r['source_size']} / {r['target_size']}")
+            print(f"Target模式在Source出现比例      : {_fmt_pct(r['pattern_overlap_rate'])}")
+            print(f"Target未见模式比例              : {_fmt_pct(r['target_unseen_pattern_rate'])}")
+            print(f"Target词表在Source覆盖率        : {_fmt_pct(r['token_vocab_overlap_rate'])}")
+            print(f"Target未见词Token占比           : {_fmt_pct(r['target_unseen_token_ratio'])}")
+            print(f"Source/Target词分布JS散度       : {r['token_js_divergence']:.4f}")
+            if r["source_pos_rate"] is not None:
+                print(
+                    "Source异常率 / Target异常率     : "
+                    f"{_fmt_pct(r['source_pos_rate'])} / {_fmt_pct(r['target_pos_rate'])}"
+                )
 
     print("\n---------------- Interpretation ----------------")
-    print("若 ORDERED 相比 RANDOM 出现：")
-    print("1) 更高的 Test未见模板比例 / 未见词占比")
-    print("2) 更低的 模板重叠率 / 词表覆盖率")
+    print("若 ORDERED 相比 RANDOM 或 train -> test 相比 train -> val 出现：")
+    print("1) 更高的 Target未见模式比例 / 未见词占比")
+    print("2) 更低的 模式重叠率 / 词表覆盖率")
     print("3) 更高的 JS 散度")
-    print("则可认为 ORDERED 划分更可能存在分布外(OOD)问题。")
+    print("则可认为目标切分更可能存在分布外(OOD)或时间漂移问题。")
 
 
 if __name__ == "__main__":
     main()
-
-
-
-# ================ OOD Split Validation ================
-# CSV            : outputs/BGL/grouped_logs.csv
-# Samples        : 78558
-# Train Ratio    : 0.7
-# Random Seed    : 42
-
-# [ORDERED]
-# Train/Test                     : 54990 / 23568
-# Test模板在Train出现比例         : 8.05%
-# Test未见模板比例                : 91.95%
-# Test词表在Train覆盖率           : 15.93%
-# Test未见词Token占比             : 21.04%
-# Train/Test词分布JS散度          : 0.2894
-# Train异常率 / Test异常率        : 9.55% / 9.53%
-
-# [RANDOM]
-# Train/Test                     : 54990 / 23568
-# Test模板在Train出现比例         : 41.44%
-# Test未见模板比例                : 58.56%
-# Test词表在Train覆盖率           : 51.63%
-# Test未见词Token占比             : 0.37%
-# Train/Test词分布JS散度          : 0.0054
-# Train异常率 / Test异常率        : 9.63% / 9.35%
-
-# ---------------- Interpretation ----------------
-# 若 ORDERED 相比 RANDOM 出现：
-# 1) 更高的 Test未见模板比例 / 未见词占比
-# 2) 更低的 模板重叠率 / 词表覆盖率
-# 3) 更高的 JS 散度
-# 则可认为 ORDERED 划分更可能存在分布外(OOD)问题。
-
-# ================ OOD Split Validation ================
-# CSV            : outputs/Spirit/grouped_logs.csv
-# Samples        : 83333
-# Train Ratio    : 0.7
-# Random Seed    : 42
-
-# [ORDERED]
-# Train/Test                     : 58333 / 25000
-# Test模板在Train出现比例         : 10.47%
-# Test未见模板比例                : 89.53%
-# Test词表在Train覆盖率           : 75.55%
-# Test未见词Token占比             : 0.19%
-# Train/Test词分布JS散度          : 0.1463
-# Train异常率 / Test异常率        : 50.76% / 2.41%
-
-# [RANDOM]
-# Train/Test                     : 58333 / 25000
-# Test模板在Train出现比例         : 27.98%
-# Test未见模板比例                : 72.02%
-# Test词表在Train覆盖率           : 76.99%
-# Test未见词Token占比             : 0.04%
-# Train/Test词分布JS散度          : 0.0009
-# Train异常率 / Test异常率        : 36.17% / 36.46%
-
-# ---------------- Interpretation ----------------
-# 若 ORDERED 相比 RANDOM 出现：
-# 1) 更高的 Test未见模板比例 / 未见词占比
-# 2) 更低的 模板重叠率 / 词表覆盖率
-# 3) 更高的 JS 散度
-# 则可认为 ORDERED 划分更可能存在分布外(OOD)问题。
