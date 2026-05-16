@@ -66,14 +66,20 @@ def _compute_metrics(y_true: pd.Series, y_pred: pd.Series, score: Optional[pd.Se
     }
 
 
-def _resolve_results_file(dataset: str, filename: str, explicit: Optional[str]) -> Path:
+def _resolve_results_file(dataset: str, filename: str, explicit: Optional[str], alternatives: Optional[list[str]] = None) -> Path:
     if explicit:
         path = Path(explicit)
-    else:
-        path = Path("outputs") / dataset / "results" / filename
-    if not path.exists():
-        raise FileNotFoundError(f"文件不存在: {path}")
-    return path
+        if not path.exists():
+            raise FileNotFoundError(f"文件不存在: {path}")
+        return path
+
+    results_dir = Path("outputs") / dataset / "results"
+    candidates = [filename] + (alternatives or [])
+    for name in candidates:
+        path = results_dir / name
+        if path.exists():
+            return path
+    raise FileNotFoundError(f"文件不存在，已尝试: {[str(results_dir / name) for name in candidates]}")
 
 
 def _build_llm_pred(df: pd.DataFrame, uncertain_policy: str, fallback_sm_pred: pd.Series) -> Tuple[pd.Series, str]:
@@ -127,7 +133,12 @@ def evaluate(
     llm_csv: Optional[str] = None,
     save_json: bool = True,
 ):
-    llm_path = _resolve_results_file(dataset, "llm_second_pass_high_uncertain.csv", llm_csv)
+    llm_path = _resolve_results_file(
+        dataset,
+        "llm_second_pass_val_high_uncertain.csv",
+        llm_csv,
+        alternatives=["llm_second_pass_high_uncertain.csv"],
+    )
     llm_df = pd.read_csv(llm_path)
 
     if "Label" not in llm_df.columns or "Pred" not in llm_df.columns:

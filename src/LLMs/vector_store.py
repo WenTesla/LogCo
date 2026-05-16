@@ -1,4 +1,6 @@
 import argparse
+import ast
+import json
 from pathlib import Path
 from typing import List
 
@@ -13,6 +15,7 @@ from config import (
     RAG_TRAIN_RATIO,
     RAG_RANDOM_SEED,
     RAG_USE_TRAIN_ONLY,
+    RAG_VECTOR_SOURCE,
 )
 
 from langchain_community.vectorstores import FAISS
@@ -31,17 +34,20 @@ class LogVectorStore:
         train_ratio: float = RAG_TRAIN_RATIO,
         random_seed: int = RAG_RANDOM_SEED,
         use_train_only: bool = RAG_USE_TRAIN_ONLY,
+        vector_source: str = RAG_VECTOR_SOURCE,
     ):
         self.dataset = dataset
         self.split_mode = split_mode
         self.train_ratio = train_ratio
         self.random_seed = random_seed
         self.use_train_only = use_train_only
+        self.vector_source = vector_source
         self.repo_root = Path(__file__).resolve().parents[2]
         self.inputs_root = self.repo_root / "inputs"
         self.outputs_root = (self.repo_root / outputs_root).resolve()
         self.dataset_dir = self.outputs_root / self.dataset
         self.csv_path = self.inputs_root / self.dataset / "structured.csv"
+        self.grouped_csv_path = self.dataset_dir / "grouped_logs.csv"
         self.index_dir = self.dataset_dir / self._build_index_dirname()
         self.embedding = HuggingFaceEmbeddings(
             model_name=BGE3_MODEL_NAME,
@@ -50,10 +56,11 @@ class LogVectorStore:
         self.vector_db = None
 
     def _build_index_dirname(self) -> str:
+        source_tag = "sequence" if self.vector_source == "grouped" else "event"
         if not self.use_train_only:
-            return f"{VECTOR_STORE_DIRNAME}_structured_all"
+            return f"{VECTOR_STORE_DIRNAME}_{source_tag}_all"
         ratio_tag = str(self.train_ratio).replace(".", "p")
-        return f"{VECTOR_STORE_DIRNAME}_structured_{self.split_mode}_{ratio_tag}_seed{self.random_seed}"
+        return f"{VECTOR_STORE_DIRNAME}_{source_tag}_{self.split_mode}_{ratio_tag}_seed{self.random_seed}"
 
     def _split_df(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.use_train_only:
@@ -83,6 +90,24 @@ class LogVectorStore:
     @staticmethod
     def _normalize_template(template: str) -> str:
         return str(template).strip()
+
+    @staticmethod
+    def _templates_to_text(value) -> str:
+        if isinstance(value, list):
+            return "\n".join(str(item).strip() for item in value if str(item).strip())
+        if pd.isna(value):
+            return ""
+
+        text = str(value).strip()
+        if not text:
+            return ""
+        try:
+            parsed = ast.literal_eval(text)
+            if isinstance(parsed, list):
+                return "\n".join(str(item).strip() for item in parsed if str(item).strip())
+        except Exception:
+            pass
+        return text
 
     @staticmethod
     def _normalize_label(raw_label):
@@ -133,6 +158,50 @@ class LogVectorStore:
             for item in deduped_docs.values()
         ]
 
+    def _build_documents_from_grouped_logs(self) -> List[Document]:
+        if not self.grouped_csv_path.exists():
+            print(f"⚠️ 未找到 {self.grouped_csv_path}，回退到 structured.csv 单模板向量库")
+            return self._build_documents_from_structured_csv()
+
+        df = pd.read_csv(self.grouped_csv_path)
+        required_cols = {"Templates", "Label"}
+        missing_cols = required_cols - set(df.columns)
+        if missing_cols:
+            raise ValueError(f"{self.grouped_csv_path} 缺少列: {sorted(missing_cols)}")
+
+        df = self._split_df(df)
+        deduped_docs = {}
+
+        for row in tqdm(df.itertuples(index=True), total=len(df), desc="📝 构建日志序列案例文档"):
+            templates = getattr(row, "Templates", "")
+            text = self._templates_to_text(templates)
+            if not text:
+                continue
+
+            label_value = self._normalize_label(getattr(row, "Label", None))
+            if text not in deduped_docs:
+                deduped_docs[text] = {
+                    "page_content": text,
+                    "metadata": {
+                        "Label": label_value,
+                        "dup_count": 1,
+                        "source": "grouped_logs",
+                        "sample_indices": [int(row.Index)],
+                        "templates_json": json.dumps(text.splitlines(), ensure_ascii=False),
+                    },
+                }
+            else:
+                meta = deduped_docs[text]["metadata"]
+                meta["dup_count"] += 1
+                meta["sample_indices"].append(int(row.Index))
+                if label_value is not None:
+                    meta["Label"] = int(max(meta["Label"] or 0, label_value))
+
+        return [
+            Document(page_content=item["page_content"], metadata=item["metadata"])
+            for item in deduped_docs.values()
+        ]
+
     def build_from_grouped_logs(self, force_rebuild: bool = False) -> int:
         if self.index_dir.exists() and not force_rebuild:
             self.vector_db = FAISS.load_local(
@@ -142,13 +211,19 @@ class LogVectorStore:
             )
             return self.vector_db.index.ntotal
 
-        print("🔨 开始读取并解析 structured.csv 中的 EventTemplate...")
-        documents = self._build_documents_from_structured_csv()
+        if self.vector_source == "grouped":
+            print("🔨 开始读取并解析 grouped_logs.csv 中的 Templates 序列...")
+            documents = self._build_documents_from_grouped_logs()
+        elif self.vector_source == "structured":
+            print("🔨 开始读取并解析 structured.csv 中的 EventTemplate...")
+            documents = self._build_documents_from_structured_csv()
+        else:
+            raise ValueError(f"vector_source 必须是 grouped/structured，当前: {self.vector_source}")
         if not documents:
-            raise ValueError(f"{self.csv_path} 中没有可用的 EventTemplate")
+            raise ValueError("没有可用的向量库文档")
 
         # 向量入库也加进度条
-        print(f"🚀 开始生成向量库 (去重后共 {len(documents)} 条模板)...")
+        print(f"🚀 开始生成向量库 (去重后共 {len(documents)} 条文档, source={self.vector_source})...")
         self.vector_db = FAISS.from_documents(documents, self.embedding)
 
         self.index_dir.mkdir(parents=True, exist_ok=True)
@@ -173,6 +248,7 @@ def build_faiss_for_dataset(
     train_ratio: float = RAG_TRAIN_RATIO,
     random_seed: int = RAG_RANDOM_SEED,
     use_train_only: bool = RAG_USE_TRAIN_ONLY,
+    vector_source: str = RAG_VECTOR_SOURCE,
 ):
     store = LogVectorStore(
         dataset=dataset,
@@ -180,6 +256,7 @@ def build_faiss_for_dataset(
         train_ratio=train_ratio,
         random_seed=random_seed,
         use_train_only=use_train_only,
+        vector_source=vector_source,
     )
     count = store.build_from_grouped_logs(force_rebuild=force_rebuild)
     return store.index_dir, count
@@ -192,6 +269,7 @@ if __name__ == "__main__":
     parser.add_argument("--split-mode", default=RAG_SPLIT_MODE, choices=["ordered", "random"], help="切分方式")
     parser.add_argument("--train-ratio", type=float, default=RAG_TRAIN_RATIO, help="训练集比例")
     parser.add_argument("--random-seed", type=int, default=RAG_RANDOM_SEED, help="随机切分种子")
+    parser.add_argument("--vector-source", default=RAG_VECTOR_SOURCE, choices=["grouped", "structured"], help="grouped=模板序列案例库, structured=单模板库")
     parser.add_argument(
         "--use-all-data",
         action="store_true",
@@ -207,6 +285,7 @@ if __name__ == "__main__":
         train_ratio=args.train_ratio,
         random_seed=args.random_seed,
         use_train_only=not args.use_all_data,
+        vector_source=args.vector_source,
     )
     count = store.build_from_grouped_logs(force_rebuild=args.force_rebuild)
     index_dir = store.index_dir

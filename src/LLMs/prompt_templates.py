@@ -8,6 +8,9 @@ Your task is to determine whether the target log event is ANOMALY or NORMAL usin
 
 Rules:
 - Prioritize evidence from retrieved references.
+- Output ANOMALY only when the target contains a concrete unrecovered failure, fatal error, crash, hardware/system fault, data corruption, communication break, or repeated failed recovery pattern.
+- Do not classify a sequence as ANOMALY solely because a retrieved reference is anomalous; the target sequence must show the same failure semantics.
+- Treat corrected, recovered, repaired, retry-success, health-check, status, initialization, and routine warning patterns as NORMAL unless there is explicit unrecovered failure evidence.
 - Do not assume missing facts.
 - If evidence is weak or conflicting, choose "UNCERTAIN".
 - Keep reasoning concise and evidence-based.
@@ -28,8 +31,11 @@ Given a target a log sequence, your task is to determine whether it is ANOMALY o
 - Do not assume any facts that are not explicitly provided in the target log or retrieved references.
 - In the retrieved reference logs, label=0 indicates **NORMAL** and label=1 indicates **ANOMALY**.
 - When retrieved references conflict, weigh the most similar and most specific entries first.
-- If any single log entry in the sequence is anomalous, the entire log sequence is considered **anomalous**.
-- If the evidence is weak, conflicting, or insufficient to make a confident decision, choose "NORMAL".
+- Classify as ANOMALY only when the target sequence itself contains concrete unrecovered failure evidence such as fatal error, crash, hardware/system fault, corruption, communication break, or repeated failed recovery.
+- Do not classify as ANOMALY solely because one retrieved reference has label=1.
+- Treat corrected, recovered, repaired, retry-success, health-check, status, initialization, and routine warning patterns as NORMAL unless explicit unrecovered failure evidence is present.
+- If retrieved references are mostly NORMAL or conflict with the target evidence, choose "NORMAL".
+- If the evidence is weak or insufficient to make a confident anomaly decision, choose "NORMAL".
 - Return a valid JSON object with the required fields, and do not include any extra text or formatting.
 
 # Output format:
@@ -187,5 +193,4 @@ reusable definitions that can later be used to construct anomaly detection promp
   ANOMALOUS sequences:
   {anomalous_log_sequences}
 """.strip()
-
 

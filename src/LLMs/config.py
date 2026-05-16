@@ -6,7 +6,7 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 
 # ===================== LLM 配置 =====================
-LLM_TYPE = os.getenv("LLM_TYPE", "openai")  # openai / ollama
+LLM_TYPE = os.getenv("LLM_TYPE", "ollama")  # openai / ollama
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-xxx")
 # print(f"🔑 OpenAI API Key: {'*' * 4 + OPENAI_API_KEY[-4:]} (长度: {len(OPENAI_API_KEY
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com") # ollama 模式下不使用
@@ -24,6 +24,7 @@ DATASET = os.getenv("DATASET", "BGL")
 # BGE3_MODEL_NAME = os.getenv("BGE3_MODEL_NAME", "BAAI/bge-m3")
 BGE3_MODEL_NAME = os.getenv("BGE3_MODEL_NAME", "BAAI/bge-small-en-v1.5")
 VECTOR_STORE_DIRNAME = os.getenv("VECTOR_STORE_DIRNAME", "faiss_bge3")
+RAG_VECTOR_SOURCE = os.getenv("RAG_VECTOR_SOURCE", "grouped")  # grouped / structured
 RAG_SPLIT_MODE = os.getenv("RAG_SPLIT_MODE", "ordered")  # ordered / random
 RAG_TRAIN_RATIO = float(os.getenv("RAG_TRAIN_RATIO", "0.5"))
 RAG_RANDOM_SEED = int(os.getenv("RAG_RANDOM_SEED", "42"))

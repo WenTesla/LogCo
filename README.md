@@ -104,9 +104,11 @@ python src/LLMs/vector_store.py \
 ```
 
 说明：
+- 默认使用 `outputs/<DATASET>/grouped_logs.csv` 的 `Templates` 构建模板序列历史案例库；
+- 如需复现实验 baseline，可加 `--vector-source structured` 使用旧的单条 `EventTemplate` 去重模板库；
 - 默认仅用训练部分建库（避免泄漏）；
 - `--use-all-data` 可改为全量建库；
-- 索引目录会包含切分参数，例如 `faiss_bge3_ordered_0p7_seed42`。
+- 索引目录会包含来源和切分参数，例如 `faiss_bge3_sequence_ordered_0p7_seed42`。
 
 5. 高不确定样本二次检测（去重后调用 LLM）
 
@@ -159,6 +161,7 @@ python src/evaluate_cascade.py --dataset Spirit --scope high_uncertain
 
 可选参数：
 - `--uncertain-policy`：`fallback_sm` / `as_anomaly` / `as_normal` / `drop`
+- 推荐使用默认 `fallback_sm`，避免把 LLM 的 `uncertain/unknown` 直接计为异常导致精确率下降。
 
 评估报告保存为：
 - `outputs/<DATASET>/results/cascade_eval_report_full_test.json`

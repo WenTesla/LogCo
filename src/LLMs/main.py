@@ -240,6 +240,68 @@ def _parse_result(text: str):
     }
 
 
+def _label_to_int(value):
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip().lower()
+    if text in {"0", "normal", "benign", "false", "ok"}:
+        return 0
+    if text in {"1", "anomaly", "anomalous", "true"}:
+        return 1
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def _retrieval_diagnostics(docs):
+    labels = [_label_to_int(d.metadata.get("Label")) for d in docs]
+    normal_count = sum(1 for label in labels if label == 0)
+    anomaly_count = sum(1 for label in labels if label == 1)
+    unknown_count = sum(1 for label in labels if label is None)
+    refs = []
+    for i, doc in enumerate(docs, start=1):
+        text = str(doc.page_content).replace("\n", " | ")
+        refs.append(
+            {
+                "ref": f"R{i}",
+                "label": labels[i - 1],
+                "dup_count": doc.metadata.get("dup_count"),
+                "text": text[:500],
+            }
+        )
+    return {
+        "retrieved_labels": labels,
+        "retrieved_normal_count": normal_count,
+        "retrieved_anomaly_count": anomaly_count,
+        "retrieved_unknown_count": unknown_count,
+        "retrieved_refs": refs,
+    }
+
+
+def _apply_precision_guard(parsed: dict, diagnostics: dict, decision_mode: str) -> dict:
+    if parsed.get("status") != "anomaly":
+        return parsed
+
+    normal_count = diagnostics["retrieved_normal_count"]
+    anomaly_count = diagnostics["retrieved_anomaly_count"]
+    if normal_count <= anomaly_count:
+        return parsed
+
+    guarded = parsed.copy()
+    if str(decision_mode).strip().lower() == "binary":
+        guarded["status"] = "normal"
+    else:
+        guarded["status"] = "uncertain"
+    guarded["level"] = "low"
+    guarded["reason"] = (
+        "Precision guard applied: retrieved references are mostly normal, "
+        "so the anomaly decision is not accepted without stronger evidence. "
+        f"Original reason: {parsed.get('reason', '')}"
+    )
+    return guarded
+
+
 def detect(
     log: str,
     vector_db: LogVectorStore,
@@ -254,6 +316,7 @@ def detect(
 
     # 1. 检索相似日志
     docs = vector_db.search(log)
+    diagnostics = _retrieval_diagnostics(docs)
     context = "\n".join(
         [f"[R{i+1}] label={d.metadata.get('Label')}, text=\"{d.page_content}\"" for i, d in enumerate(docs)]
     )
@@ -285,7 +348,9 @@ def detect(
     # print(f"\n💡 LLM 输出原始结果:\n{content}")
     # 4. 解析
     parsed = _parse_result(content)
+    parsed = _apply_precision_guard(parsed, diagnostics, decision_mode=decision_mode)
     parsed["token_usage"] = token_usage
+    parsed["retrieval"] = diagnostics
     if verbose:
         print(f"异常状态：{parsed['status']}")
         print(f"等级：{parsed['level']}")
@@ -297,6 +362,12 @@ def detect(
             f"completion={token_usage['completion_tokens']}, "
             f"total={token_usage['total_tokens']}, "
             f"source={token_usage['token_usage_source']}"
+        )
+        print(
+            "检索标签："
+            f"normal={diagnostics['retrieved_normal_count']}, "
+            f"anomaly={diagnostics['retrieved_anomaly_count']}, "
+            f"unknown={diagnostics['retrieved_unknown_count']}"
         )
     return parsed
 
@@ -404,6 +475,11 @@ def _run_llm_rag_on_df(
                 "llm_level": parsed["level"],
                 "llm_reason": parsed["reason"],
                 "llm_suggestion": parsed["suggestion"],
+                "retrieved_labels": json.dumps(parsed["retrieval"]["retrieved_labels"], ensure_ascii=False),
+                "retrieved_normal_count": parsed["retrieval"]["retrieved_normal_count"],
+                "retrieved_anomaly_count": parsed["retrieval"]["retrieved_anomaly_count"],
+                "retrieved_unknown_count": parsed["retrieval"]["retrieved_unknown_count"],
+                "retrieved_refs": json.dumps(parsed["retrieval"]["retrieved_refs"], ensure_ascii=False),
                 "llm_prompt_tokens": parsed["token_usage"]["prompt_tokens"],
                 "llm_completion_tokens": parsed["token_usage"]["completion_tokens"],
                 "llm_total_tokens": parsed["token_usage"]["total_tokens"],
@@ -423,6 +499,11 @@ def _run_llm_rag_on_df(
                 "llm_level",
                 "llm_reason",
                 "llm_suggestion",
+                "retrieved_labels",
+                "retrieved_normal_count",
+                "retrieved_anomaly_count",
+                "retrieved_unknown_count",
+                "retrieved_refs",
                 "llm_prompt_tokens",
                 "llm_completion_tokens",
                 "llm_total_tokens",
