@@ -2,7 +2,7 @@ import config
 import torch
 import pandas as pd
 from torch.utils.data import DataLoader
-from sklearn.metrics import classification_report, roc_auc_score, precision_recall_fscore_support
+from sklearn.metrics import classification_report, roc_auc_score, precision_recall_fscore_support, confusion_matrix
 from tqdm import tqdm
 from Model import BertEDL
 from LogDataset import LogDataset
@@ -11,7 +11,7 @@ import os
 # ===================== 加载数据集 & 划分 =====================
 full_dataset = LogDataset(
     config.GROUPED_LOGS_PATH,
-    bert_path=config.BERT_PATH,
+    bert_path=config.PRETRAINED_MODEL_PATH,
     max_len=config.MAX_LEN,
     batch_size=config.FEATURE_BATCH_SIZE,
     device=config.DEVICE,
@@ -74,6 +74,7 @@ all_templates = [df.loc[i, "Templates"] for i in test_indices]
 # ===================== 异常检测专用指标 =====================
 prec, rec, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average="binary", zero_division=0)
 auc = roc_auc_score(all_labels, all_probs)
+tn, fp, fn, tp = confusion_matrix(all_labels, all_preds, labels=[0, 1]).ravel()
 
 print("\n" + "=" * 65)
 print("📊 日志异常检测专用评估指标")
@@ -82,6 +83,10 @@ print(f"Precision (精确率)      : {prec:.4f}")
 print(f"Recall    (召回率)      : {rec:.4f}")
 print(f"F1        (F1分数)      : {f1:.4f}")
 print(f"AUC       (AUC分数)     : {auc:.4f}")
+print(f"TN        (真负例)      : {tn}")
+print(f"FP        (假正例)      : {fp}")
+print(f"FN        (假负例)      : {fn}")
+print(f"TP        (真正例)      : {tp}")
 print("\n详细分类报告：")
 print(classification_report(all_labels, all_preds, target_names=["Normal", "Anomaly"], digits=4, zero_division=0))
 

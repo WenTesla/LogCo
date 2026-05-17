@@ -12,7 +12,7 @@ import os
 # ===================== 加载 =====================
 full_dataset = LogDataset(
     config.GROUPED_LOGS_PATH,
-    bert_path=config.BERT_PATH,
+    bert_path=config.PRETRAINED_MODEL_PATH,
     max_len=config.MAX_LEN,
     batch_size=config.FEATURE_BATCH_SIZE,
     device=config.DEVICE,

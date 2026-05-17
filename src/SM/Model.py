@@ -32,7 +32,9 @@ class BertEDL(nn.Module):
 
 
 def edl_loss(alpha, labels, num_classes=2, annealing=0.01, sample_weight=None):
+    # 计算总证据
     S = torch.sum(alpha, dim=1, keepdim=True)
+    # 计算标签的 one-hot 编码
     label_onehot = torch.nn.functional.one_hot(labels, num_classes).float()
 
     # 1. 核心损失

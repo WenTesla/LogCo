@@ -4,7 +4,7 @@ from pathlib import Path
 import argparse
 import pandas as pd
 from tqdm import tqdm
-from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, roc_auc_score
 
 from prompt_templates import (
     LOG_ANOMALY_PROMPT,
@@ -28,6 +28,7 @@ from config import (
     OLLAMA_MODEL,
     OLLAMA_BASE_URL,
     RAG_CONTEXT_MODE,
+    TOP_K,
     UNCERTAINTY_SPLIT,
 )
 
@@ -199,7 +200,31 @@ def _retrieval_diagnostics(docs):
         "retrieved_anomaly_count": anomaly_count,
         "retrieved_unknown_count": unknown_count,
         "retrieved_refs": refs,
+        "retrieved_normal_refs": [ref for ref in refs if ref["label"] == 0],
+        "retrieved_anomaly_refs": [ref for ref in refs if ref["label"] == 1],
     }
+
+
+def _format_doc_ref(doc, ref: str) -> str:
+    text = str(doc.page_content).replace("\n", " | ")
+    return f"[{ref}] label={doc.metadata.get('Label')}, dup_count={doc.metadata.get('dup_count')}, text=\"{text}\""
+
+
+def _format_contrastive_context(normal_docs, anomaly_docs):
+    normal_context = "\n".join(
+        _format_doc_ref(doc, f"N{i}") for i, doc in enumerate(normal_docs, start=1)
+    )
+    anomaly_context = "\n".join(
+        _format_doc_ref(doc, f"A{i}") for i, doc in enumerate(anomaly_docs, start=1)
+    )
+    return "\n\n".join(
+        [
+            "Similar NORMAL log sequences:",
+            normal_context or "None retrieved.",
+            "Similar ANOMALY log sequences:",
+            anomaly_context or "None retrieved.",
+        ]
+    )
 
 
 def _apply_precision_guard(parsed: dict, diagnostics: dict, decision_mode: str) -> dict:
@@ -244,13 +269,22 @@ def detect(
     if _uses_history(rag_context_mode):
         if vector_db is None:
             raise ValueError(f"{rag_context_mode} mode requires vector_db")
-        docs = vector_db.search(log)
+        retrieval_result = vector_db.contrastive_search(log, top_k=TOP_K)
+        normal_docs = retrieval_result["normal"]
+        anomaly_docs = retrieval_result["anomaly"]
+        docs = retrieval_result["docs"]
+        context = _format_contrastive_context(normal_docs, anomaly_docs)
     else:
         docs = []
+        normal_docs = []
+        anomaly_docs = []
+        context = ""
     diagnostics = _retrieval_diagnostics(docs)
-    context = "\n".join(
-        [f"[R{i+1}] label={d.metadata.get('Label')}, text=\"{d.page_content}\"" for i, d in enumerate(docs)]
-    )
+    normal_diagnostics = _retrieval_diagnostics(normal_docs)
+    anomaly_diagnostics = _retrieval_diagnostics(anomaly_docs)
+    diagnostics["retrieved_normal_refs"] = normal_diagnostics["retrieved_refs"]
+    diagnostics["retrieved_anomaly_refs"] = anomaly_diagnostics["retrieved_refs"]
+    diagnostics["contrastive_top_k_per_class"] = TOP_K
     if _uses_rules(rag_context_mode):
         rule_store = rule_store or _get_rule_store(DATASET)
         retrieved_rules = rule_store.search(log)
@@ -295,6 +329,7 @@ def detect(
     parsed = _parse_result(content)
     if _uses_history(rag_context_mode):
         parsed = _apply_precision_guard(parsed, diagnostics, decision_mode=decision_mode)
+    parsed["llm_raw_output"] = content
     parsed["retrieval"] = diagnostics
     parsed["rules"] = retrieved_rules
     parsed["rag_context_mode"] = rag_context_mode
@@ -429,11 +464,14 @@ def _run_llm_rag_on_df(
                 "llm_level": parsed["level"],
                 "llm_reason": parsed["reason"],
                 "llm_suggestion": parsed["suggestion"],
+                "llm_raw_output": parsed["llm_raw_output"],
                 "retrieved_labels": json.dumps(parsed["retrieval"]["retrieved_labels"], ensure_ascii=False),
                 "retrieved_normal_count": parsed["retrieval"]["retrieved_normal_count"],
                 "retrieved_anomaly_count": parsed["retrieval"]["retrieved_anomaly_count"],
                 "retrieved_unknown_count": parsed["retrieval"]["retrieved_unknown_count"],
                 "retrieved_refs": json.dumps(parsed["retrieval"]["retrieved_refs"], ensure_ascii=False),
+                "retrieved_normal_refs": json.dumps(parsed["retrieval"]["retrieved_normal_refs"], ensure_ascii=False),
+                "retrieved_anomaly_refs": json.dumps(parsed["retrieval"]["retrieved_anomaly_refs"], ensure_ascii=False),
                 "retrieved_rule_ids": json.dumps(
                     [rule["rule_id"] for rule in parsed["rules"]],
                     ensure_ascii=False,
@@ -444,6 +482,8 @@ def _run_llm_rag_on_df(
 
     result_df = pd.DataFrame(results)
     unique_result_df = unique_df.merge(result_df, on="log_text", how="left")
+    status_to_pred = {"normal": 0, "anomaly": 1}
+    unique_result_df["llm_pred"] = unique_result_df["llm_status"].map(status_to_pred)
     # 映射回原始样本，保证后续指标按原样本统计
     df_out = df.merge(
         unique_result_df[
@@ -455,11 +495,15 @@ def _run_llm_rag_on_df(
                 "llm_level",
                 "llm_reason",
                 "llm_suggestion",
+                "llm_raw_output",
+                "llm_pred",
                 "retrieved_labels",
                 "retrieved_normal_count",
                 "retrieved_anomaly_count",
                 "retrieved_unknown_count",
                 "retrieved_refs",
+                "retrieved_normal_refs",
+                "retrieved_anomaly_refs",
                 "retrieved_rule_ids",
                 "retrieved_rules",
             ]
@@ -467,9 +511,6 @@ def _run_llm_rag_on_df(
         on="log_text",
         how="left",
     )
-
-    status_to_pred = {"normal": 0, "anomaly": 1}
-    df_out["llm_pred"] = df_out["llm_status"].map(status_to_pred)
 
     out_dir = Path("outputs") / dataset / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -489,11 +530,13 @@ def _run_llm_rag_on_df(
         if len(metric_df) > 0:
             y_true = metric_df["Label"].astype(int).to_numpy()
             y_pred = metric_df["llm_pred"].astype(int).to_numpy()
+            tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
             prec, rec, f1, _ = precision_recall_fscore_support(
                 y_true, y_pred, average="binary", zero_division=0
             )
             print(
-                f"✅ 二次检测(样本级) Precision={prec:.4f}, Recall={rec:.4f}, F1={f1:.4f}, "
+                f"✅ 二次检测(样本级) TP={tp} FP={fp} TN={tn} FN={fn} | "
+                f"Precision={prec:.4f} Recall={rec:.4f} F1={f1:.4f} | "
                 f"覆盖率={len(metric_df)/len(df_out):.2%}"
             )
             if "AnomalyScore" in metric_df.columns:
@@ -517,14 +560,14 @@ def second_pass_for_high_uncertain(
     df = pd.read_csv(input_csv)
     print(
         f"✅ 发现高不确定样本文件: {input_csv}，共 {len(df)} 条样本，"
-        f"RAG_CONTEXT_MODE={rag_context_mode}。"
+        f"RAG_CONTEXT_MODE={rag_context_mode}, 历史日志检索=contrastive。"
     )
     return _run_llm_rag_on_df(
         df=df,
         vector_db=vector_db,
         dataset=dataset,
         decision_mode=decision_mode,
-        output_prefix=f"llm_second_pass_{UNCERTAINTY_SPLIT}_high_uncertain_{rag_context_mode}",
+        output_prefix=f"llm_second_pass_{UNCERTAINTY_SPLIT}_high_uncertain_{rag_context_mode}_contrastive",
         input_csv=input_csv,
         rag_context_mode=rag_context_mode,
     )
@@ -544,7 +587,7 @@ def full_test_llm_rag(
         vector_db=vector_db,
         dataset=dataset,
         decision_mode=decision_mode,
-        output_prefix=f"llm_full_test_rag_{rag_context_mode}",
+        output_prefix=f"llm_full_test_rag_{rag_context_mode}_contrastive",
         input_csv=input_csv,
         rag_context_mode=rag_context_mode,
     )
@@ -560,12 +603,6 @@ if __name__ == "__main__":
         help="high_uncertain=仅高不确定样本, full_test=全测试集消融实验",
     )
     parser.add_argument(
-        "--decision-mode",
-        default=DECISION_MODE,
-        choices=["triage", "binary"],
-        help="triage=正常/异常/不确定, binary=仅正常/异常",
-    )
-    parser.add_argument(
         "--rag-context-mode",
         default=RAG_CONTEXT_MODE,
         choices=sorted(VALID_RAG_CONTEXT_MODES),
@@ -575,12 +612,10 @@ if __name__ == "__main__":
     if args.scope == "full_test":
         full_test_llm_rag(
             dataset=args.dataset,
-            decision_mode=args.decision_mode,
             rag_context_mode=args.rag_context_mode,
         )
     else:
         second_pass_for_high_uncertain(
             dataset=args.dataset,
-            decision_mode=args.decision_mode,
             rag_context_mode=args.rag_context_mode,
         )

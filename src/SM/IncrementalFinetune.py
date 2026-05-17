@@ -124,7 +124,7 @@ def _build_incremental_dataset(full_dataset, train_indices, feedback_df):
 def main():
     full_dataset = LogDataset(
         config.GROUPED_LOGS_PATH,
-        bert_path=config.BERT_PATH,
+        bert_path=config.PRETRAINED_MODEL_PATH,
         max_len=config.MAX_LEN,
         batch_size=config.FEATURE_BATCH_SIZE,
         device=config.DEVICE,
@@ -191,7 +191,7 @@ def main():
 
         avg_loss = total_loss / len(finetune_loader)
         loss_history.append({"epoch": epoch + 1, "avg_loss": avg_loss})
-        print(f"✅ Incremental Epoch {epoch + 1} 平均损失: {avg_loss:.4f}")
+        # print(f"✅ Incremental Epoch {epoch + 1} 平均损失: {avg_loss:.4f}")
 
     os.makedirs(os.path.dirname(config.INCREMENTAL_SAVE_MODEL_PATH), exist_ok=True)
     torch.save(model.state_dict(), config.INCREMENTAL_SAVE_MODEL_PATH)

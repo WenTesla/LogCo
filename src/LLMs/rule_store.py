@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
 
-from config import RULES_DIR, RULE_TOP_K
+from config import RULES_DIR
 
 
 @dataclass(frozen=True)
@@ -89,12 +89,12 @@ class RuleStore:
                     )
         return rules
 
-    def search(self, log_text: str, top_k: int = RULE_TOP_K) -> List[dict]:
+    def search(self, log_text: str) -> List[dict]:
         if not self.rules:
             return []
 
         query_tokens = self._tokens(log_text)
-        scored = []
+        matched_rules = []
         for rule in self.rules:
             hits = self._keyword_hits(log_text, rule.keywords)
             if not hits:
@@ -102,9 +102,8 @@ class RuleStore:
             rule_tokens = self._tokens(rule.text)
             token_overlap = len(query_tokens & rule_tokens)
             score = rule.priority * 10 + len(hits) * 10 + token_overlap
-            scored.append((score, hits, rule))
+            matched_rules.append((score, hits, rule))
 
-        scored.sort(key=lambda item: (item[0], item[2].priority), reverse=True)
         return [
             {
                 "ref": f"D{i}",
@@ -117,7 +116,7 @@ class RuleStore:
                 "rationale": rule.rationale,
                 "score": round(score, 4),
             }
-            for i, (score, hits, rule) in enumerate(scored[:top_k], start=1)
+            for i, (score, hits, rule) in enumerate(matched_rules, start=1)
         ]
 
 

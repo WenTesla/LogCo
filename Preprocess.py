@@ -32,10 +32,12 @@ def group_logs(structured_log_file:str, window_size:int, step_size:int, output_d
         for start_idx in tqdm(range(0, total_logs - window_size + 1, step_size), desc="按滑动窗口分组日志中"):
             window = structured_log.iloc[start_idx:start_idx + window_size]
             template = list(set(window['EventTemplate'].tolist())) # 去重后的模板列表
+            # template = list(dict.fromkeys(window['EventTemplate'].tolist())) # 保持原始顺序的去重
             label = 1 if window['Label'].apply(lambda x: str(x).strip() not in ['-', '0']).any() else 0 # 窗口内有异常则标记为异常
             contents = window['Content'].tolist() # 窗口内的日志内容列表
             regex_contents = [BGL_regex(content) for content in contents] # 为每一条原始日志进行正则化
             regex_contents = list(set(regex_contents)) # 去重后的正则化日志列表
+            # regex_contents = list(dict.fromkeys(regex_contents)) # 保持原始顺序的去重
             grouped_data.append((regex_contents,template, label))
             
     elif group_type=="time": # 时间窗口分组

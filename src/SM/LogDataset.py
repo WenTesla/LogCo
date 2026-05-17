@@ -42,13 +42,13 @@ class LogDataset(Dataset):
         # 设备
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = AutoTokenizer.from_pretrained(bert_path, use_fast=True)
-        self._report_length_stats(self.texts, self.tokenizer, max_len)
+        # self._report_length_stats(self.texts, self.tokenizer, max_len)
 
         # ==========================================
         # 关键优化：有缓存就直接加载，没有才提取
         # ==========================================
         if self.feat_cache.exists() and self.label_cache.exists():
-            print("✅ 从缓存加载 RoBERTa 特征，秒加载！")
+            print("✅ 从缓存加载特征，秒加载！")
             self.features = torch.tensor(np.load(self.feat_cache), dtype=torch.float32)
             self.labels = np.load(self.label_cache).tolist()
         else:
@@ -165,7 +165,7 @@ class LogDataset(Dataset):
 
     def split(self, mode="ordered", train_ratio=0.7, random_seed=42):
         dataset_size = len(self)
-        print(f"数据集总样本数: {dataset_size}")
+        # print(f"数据集总样本数: {dataset_size}")
         train_size = int(dataset_size * train_ratio)
         test_size = dataset_size - train_size
 
@@ -190,7 +190,7 @@ class LogDataset(Dataset):
         random_seed=42,
     ):
         dataset_size = len(self)
-        print(f"数据集总样本数: {dataset_size}")
+        # print(f"数据集总样本数: {dataset_size}")
         if mode not in {"random", "ordered"}:
             raise ValueError("mode must be random/ordered")
         if min(train_ratio, val_ratio, test_ratio) < 0:

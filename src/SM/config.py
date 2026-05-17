@@ -5,8 +5,8 @@ import os
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 # ===================== SM 配置 =====================
-ROBERTA_PATH = os.getenv("ROBERTA_PATH", os.getenv("BERT_PATH", "roberta-base"))
-BERT_PATH = ROBERTA_PATH
+# PRETRAINED_MODEL_PATH = os.getenv("PRETRAINED_MODEL_PATH", "BAAI/bge-base-en-v1.5")
+PRETRAINED_MODEL_PATH = os.getenv("PRETRAINED_MODEL_PATH", "BAAI/bge-large-en-v1.5")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 DATASET = os.getenv("DATASET", "BGL") # BGL / HDFS / Thunderbird / Spirit
@@ -34,7 +34,7 @@ VAL_RATIO = float(os.getenv("VAL_RATIO", os.getenv("RAG_VAL_RATIO", "0.2")))
 TEST_RATIO = float(os.getenv("TEST_RATIO", os.getenv("RAG_TEST_RATIO", "0.3")))
 RANDOM_SEED = int(os.getenv("RANDOM_SEED", os.getenv("RAG_RANDOM_SEED", "42")))
 UNCERTAINTY_SPLIT = os.getenv("UNCERTAINTY_SPLIT", "val") # val / test
-INFERENCE_SPLIT = os.getenv("INFERENCE_SPLIT", "test") # train / val / test
+INFERENCE_SPLIT = os.getenv("INFERENCE_SPLIT", "val") # train / val / test
 INFERENCE_MODEL_PATH = os.getenv("INFERENCE_MODEL_PATH", SAVE_MODEL_PATH)
 INFERENCE_OUTPUT_CSV = os.getenv(
     "INFERENCE_OUTPUT_CSV",

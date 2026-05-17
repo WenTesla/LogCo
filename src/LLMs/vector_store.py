@@ -9,6 +9,7 @@ from tqdm import tqdm  # 新增
 
 from config import (
     BGE3_MODEL_NAME,
+    RAG_CONTRASTIVE_FETCH_MULTIPLIER,
     TOP_K,
     VECTOR_STORE_DIRNAME,
     RAG_SPLIT_MODE,
@@ -116,7 +117,15 @@ class LogVectorStore:
         text = str(raw_label).strip()
         if not text:
             return None
-        return 0 if text == "-" else 1
+        normalized = text.lower()
+        if normalized in {"-", "0", "0.0", "normal", "benign", "false", "ok"}:
+            return 0
+        if normalized in {"1", "1.0", "anomaly", "anomalous", "true"}:
+            return 1
+        try:
+            return 0 if int(float(normalized)) == 0 else 1
+        except ValueError:
+            return 1
 
     def _build_documents_from_structured_csv(self) -> List[Document]:
         if not self.csv_path.exists():
@@ -240,6 +249,74 @@ class LogVectorStore:
             self.build_from_grouped_logs()
         return self.vector_db.similarity_search_with_score(log, k=top_k)
 
+    def _filtered_similarity_search(self, log: str, label: int, top_k: int, fetch_multiplier: int):
+        if self.vector_db is None:
+            self.build_from_grouped_logs()
+
+        total_docs = int(self.vector_db.index.ntotal)
+        fetch_k = min(max(top_k * max(fetch_multiplier, 1), top_k), total_docs)
+        while True:
+            docs = self.vector_db.similarity_search(
+                log,
+                k=top_k,
+                filter={"Label": label},
+                fetch_k=fetch_k,
+            )
+            if len(docs) >= top_k or fetch_k >= total_docs:
+                return docs
+            fetch_k = min(fetch_k * 2, total_docs)
+
+    def _filtered_similarity_search_with_score(self, log: str, label: int, top_k: int, fetch_multiplier: int):
+        if self.vector_db is None:
+            self.build_from_grouped_logs()
+
+        total_docs = int(self.vector_db.index.ntotal)
+        fetch_k = min(max(top_k * max(fetch_multiplier, 1), top_k), total_docs)
+        while True:
+            docs = self.vector_db.similarity_search_with_score(
+                log,
+                k=top_k,
+                filter={"Label": label},
+                fetch_k=fetch_k,
+            )
+            if len(docs) >= top_k or fetch_k >= total_docs:
+                return docs
+            fetch_k = min(fetch_k * 2, total_docs)
+
+    def contrastive_search(
+        self,
+        log: str,
+        top_k: int = TOP_K,
+        fetch_multiplier: int = RAG_CONTRASTIVE_FETCH_MULTIPLIER,
+    ):
+        if self.vector_db is None:
+            self.build_from_grouped_logs()
+
+        normal_docs = self._filtered_similarity_search(log, 0, top_k, fetch_multiplier)
+        anomaly_docs = self._filtered_similarity_search(log, 1, top_k, fetch_multiplier)
+        return {
+            "normal": normal_docs,
+            "anomaly": anomaly_docs,
+            "docs": normal_docs + anomaly_docs,
+        }
+
+    def contrastive_search_with_scores(
+        self,
+        log: str,
+        top_k: int = TOP_K,
+        fetch_multiplier: int = RAG_CONTRASTIVE_FETCH_MULTIPLIER,
+    ):
+        if self.vector_db is None:
+            self.build_from_grouped_logs()
+
+        normal_docs = self._filtered_similarity_search_with_score(log, 0, top_k, fetch_multiplier)
+        anomaly_docs = self._filtered_similarity_search_with_score(log, 1, top_k, fetch_multiplier)
+        return {
+            "normal": normal_docs,
+            "anomaly": anomaly_docs,
+            "docs": normal_docs + anomaly_docs,
+        }
+
 
 def build_faiss_for_dataset(
     dataset: str,
@@ -293,10 +370,12 @@ if __name__ == "__main__":
     print(f"✅ 文档数量: {count}")
 
 
-    # 测试python src/LLMs/vector_store.py --dataset BGL  --query "2023-09-15 12:00:00,000 ERROR ServiceX failed to connect to database" --top-k 5
+    # 测试 python src/LLMs/vector_store.py --dataset BGL  --query "2023-09-15 12:00:00,000 ERROR ServiceX failed to connect to database" --top-k 5
     if args.query:
-        results = store.search_with_scores(args.query, top_k=args.top_k)
+        results = store.contrastive_search_with_scores(args.query, top_k=args.top_k)
         print("\n🔎 检索结果")
-        for i, (doc, score) in enumerate(results, start=1):
-            print(f"[{i}] score={score:.4f} label={doc.metadata.get('Label')} dup_count={doc.metadata.get('dup_count')}")
-            print(f"    {doc.page_content}")
+        for group_name in ("normal", "anomaly"):
+            print(f"\n{group_name.upper()} top-{args.top_k}")
+            for i, (doc, score) in enumerate(results[group_name], start=1):
+                print(f"[{i}] score={score:.4f} label={doc.metadata.get('Label')} dup_count={doc.metadata.get('dup_count')}")
+                print(f"    {doc.page_content}")

@@ -18,7 +18,6 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
 OLLAMA_MODEL = "modelscope.cn/Qwen/Qwen3-30B-A3B-GGUF:latest"
 OLLAMA_BASE_URL = "http://localhost:11434"
 TOP_K = 3
-RULE_TOP_K = int(os.getenv("RULE_TOP_K", "3"))
 RULE_RAG_ENABLED = os.getenv("RULE_RAG_ENABLED", "true").lower() == "true"
 RAG_CONTEXT_MODE = os.getenv(
     "RAG_CONTEXT_MODE",
@@ -34,7 +33,8 @@ DATASET = os.getenv("DATASET", "BGL")
 # BGE3_MODEL_NAME = os.getenv("BGE3_MODEL_NAME", "BAAI/bge-m3")
 BGE3_MODEL_NAME = os.getenv("BGE3_MODEL_NAME", "BAAI/bge-small-en-v1.5")
 VECTOR_STORE_DIRNAME = os.getenv("VECTOR_STORE_DIRNAME", "faiss_bge3")
-RAG_VECTOR_SOURCE = os.getenv("RAG_VECTOR_SOURCE", "structured")  # grouped / structured
+RAG_VECTOR_SOURCE = os.getenv("RAG_VECTOR_SOURCE", "grouped")  # grouped / structured
+RAG_CONTRASTIVE_FETCH_MULTIPLIER = int(os.getenv("RAG_CONTRASTIVE_FETCH_MULTIPLIER", "20"))
 RAG_SPLIT_MODE = os.getenv("RAG_SPLIT_MODE", "ordered")  # ordered / random
 RAG_TRAIN_RATIO = float(os.getenv("RAG_TRAIN_RATIO", "0.5"))
 RAG_RANDOM_SEED = int(os.getenv("RAG_RANDOM_SEED", "42"))

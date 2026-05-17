@@ -5,10 +5,14 @@ You are an expert in system log analysis and anomaly detection.
 # Task:
 Given a target a log sequence, your task is to determine whether it is ANOMALY or NORMAL using the following information:
 1) The log sequence is provided as a list of log templates, where dynamic variables are masked with `<*>`. 
-2) Retrieved reference logs from a knowledge base that are semantically similar to the target log.
+2) Contrastive retrieved reference log sequences from a knowledge base:
+   - Similar NORMAL log sequences.
+   - Similar ANOMALY log sequences.
 
 # Rules:
-- Prioritize evidence from retrieved reference logs when making your decision.
+- Compare the target sequence against the similar NORMAL references and the similar ANOMALY references.
+- Decide which side the target sequence is closer to, but do not copy a reference label without checking the target sequence itself.
+- Prioritize evidence from retrieved reference log sequences when making your decision.
 - Do not assume any facts that are not explicitly provided in the target log or retrieved references.
 - In the retrieved reference logs, label=0 indicates **NORMAL** and label=1 indicates **ANOMALY**.
 - When retrieved references conflict, weigh the most similar and most specific entries first.
@@ -31,7 +35,7 @@ RAG_USER_PROMPT_BINARY = """
 Target log event:
 {target_log}
 
-Retrieved references (top-k, sorted by similarity descending):
+Contrastive retrieved references:
 {retrieved_logs}
 
 """.strip()
@@ -72,7 +76,7 @@ RAG_USER_PROMPT_BINARY_WITH_RULES = """
 Target log event:
 {target_log}
 
-Retrieved decision rules (sorted by relevance and priority):
+Retrieved decision rules:
 {retrieved_rules}
 
 Retrieved references (top-k, sorted by similarity descending):
@@ -110,7 +114,7 @@ RAG_USER_PROMPT_BINARY_RULE_ONLY = """
 Target log event:
 {target_log}
 
-Retrieved decision rules (sorted by relevance and priority):
+Retrieved decision rules:
 {retrieved_rules}
 
 """.strip()
