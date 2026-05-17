@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class BertEDL(nn.Module):
-    def __init__(self, num_classes=2, hidden_dims=[512, 256], dropout=0.3, input_dim=768):
+    def __init__(self, num_classes=2, hidden_dims=[512, 256], dropout=0.1, input_dim=768):
         super().__init__()
         self.num_classes = num_classes
 

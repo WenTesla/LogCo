@@ -41,22 +41,22 @@ def get_llm():
 
         client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
-        def invoke(prompt: str):
-            response = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-            )
-            r = response
-            return type(
-                "_Response",
-                (),
-                {
-                    "content": r.choices[0].message.content,
-                },
-            )()
+        class OpenAILLM:
+            def invoke(self, prompt: str):
+                response = client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                )
+                return type(
+                    "_Response",
+                    (),
+                    {
+                        "content": response.choices[0].message.content,
+                    },
+                )()
 
-        return type("OpenAILLM", (), {"invoke": invoke})()
+        return OpenAILLM()
     if LLM_TYPE == "ollama":
         from langchain_ollama import OllamaLLM
         print(f"🔧 使用 Ollama 模型: {OLLAMA_MODEL}，请确保 Ollama 服务已启动并加载该模型。")

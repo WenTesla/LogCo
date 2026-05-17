@@ -136,12 +136,6 @@ def evaluate_pair(
     source_texts = source_df["log_text"].tolist()
     target_texts = target_df["log_text"].tolist()
 
-    unique_source_logs = set(source_texts)
-    target_unique_logs = set(target_texts)
-
-    overlap_patterns = unique_source_logs & target_unique_logs
-    unseen_patterns = target_unique_logs - unique_source_logs
-
     source_token_counter = _build_token_counter(source_texts)
     target_token_counter = _build_token_counter(target_texts)
     source_vocab = set(source_token_counter.keys())
@@ -166,11 +160,6 @@ def evaluate_pair(
         "comparison": comparison,
         "source_size": len(source_df),
         "target_size": len(target_df),
-        "source_patterns": len(unique_source_logs),
-        "target_patterns": len(target_unique_logs),
-        "unseen_target_patterns": len(unseen_patterns),
-        "pattern_overlap_rate": _safe_div(len(overlap_patterns), len(target_unique_logs)),
-        "target_unseen_pattern_rate": _safe_div(len(unseen_patterns), len(target_unique_logs)),
         "token_vocab_overlap_rate": _safe_div(len(source_vocab & target_vocab), len(target_vocab)),
         "target_unseen_token_ratio": _safe_div(unseen_target_token_count, total_target_tokens),
         "token_js_divergence": _js_divergence_from_counters(source_token_counter, target_token_counter),
@@ -262,7 +251,6 @@ def main():
     print(f"Split Mode     : {args.split_mode}")
     print(f"Train/Val/Test : {args.train_ratio} / {args.val_ratio} / {args.test_ratio}")
     print(f"Random Seed    : {args.random_seed}")
-    print("Pattern Metric : unique normalized template sequence / window text")
 
     for mode in modes:
         results = evaluate_split(
@@ -277,10 +265,8 @@ def main():
         for r in results:
             print(f"\n{r['comparison']}")
             print(f"Source/Target                  : {r['source_size']} / {r['target_size']}")
-            print(f"Target模式在Source出现比例      : {_fmt_pct(r['pattern_overlap_rate'])}")
-            print(f"Target未见模式比例              : {_fmt_pct(r['target_unseen_pattern_rate'])}")
             print(f"Target词表在Source覆盖率        : {_fmt_pct(r['token_vocab_overlap_rate'])}")
-            print(f"Target未见词Token占比           : {_fmt_pct(r['target_unseen_token_ratio'])}")
+            print(f"OOV Token Ratio                : {_fmt_pct(r['target_unseen_token_ratio'])}")
             print(f"Source/Target词分布JS散度       : {r['token_js_divergence']:.4f}")
             if r["source_pos_rate"] is not None:
                 print(
@@ -290,11 +276,121 @@ def main():
 
     print("\n---------------- Interpretation ----------------")
     print("若 ORDERED 相比 RANDOM 或 train -> test 相比 train -> val 出现：")
-    print("1) 更高的 Target未见模式比例 / 未见词占比")
-    print("2) 更低的 模式重叠率 / 词表覆盖率")
-    print("3) 更高的 JS 散度")
+    print("1) 更高的 OOV Token Ratio")
+    print("2) 更低的 Target词表在Source覆盖率")
+    print("3) 更高的 Source/Target词分布JS散度")
     print("则可认为目标切分更可能存在分布外(OOD)或时间漂移问题。")
 
 
 if __name__ == "__main__":
     main()
+
+
+
+
+# ================ OOD Split Validation ================
+# CSV            : outputs/Spirit/grouped_logs.csv
+# Samples        : 83333
+# Split Mode     : both
+# Train/Val/Test : 0.5 / 0.2 / 0.3
+# Random Seed    : 42
+
+# [ORDERED]
+
+# train -> val
+# Source/Target                  : 41666 / 16666
+# Target词表在Source覆盖率        : 87.25%
+# OOV Token Ratio                : 1.09%
+# Source/Target词分布JS散度       : 0.2563
+# Source异常率 / Target异常率     : 51.21% / 49.66%
+
+# train -> test
+# Source/Target                  : 41666 / 25001
+# Target词表在Source覆盖率        : 74.28%
+# OOV Token Ratio                : 0.88%
+# Source/Target词分布JS散度       : 0.2183
+# Source异常率 / Target异常率     : 51.21% / 2.41%
+
+# train+val -> test
+# Source/Target                  : 58332 / 25001
+# Target词表在Source覆盖率        : 75.55%
+# OOV Token Ratio                : 0.19%
+# Source/Target词分布JS散度       : 0.1464
+# Source异常率 / Target异常率     : 50.76% / 2.41%
+
+# [RANDOM]
+
+# train -> val
+# Source/Target                  : 41666 / 16666
+# Target词表在Source覆盖率        : 81.73%
+# OOV Token Ratio                : 0.04%
+# Source/Target词分布JS散度       : 0.0010
+# Source异常率 / Target异常率     : 36.12% / 36.93%
+
+# train -> test
+# Source/Target                  : 41666 / 25001
+# Target词表在Source覆盖率        : 75.75%
+# OOV Token Ratio                : 0.04%
+# Source/Target词分布JS散度       : 0.0007
+# Source异常率 / Target异常率     : 36.12% / 36.05%
+
+# train+val -> test
+# Source/Target                  : 58332 / 25001
+# Target词表在Source覆盖率        : 77.50%
+# OOV Token Ratio                : 0.04%
+# Source/Target词分布JS散度       : 0.0007
+# Source异常率 / Target异常率     : 36.35% / 36.05%
+
+
+# ================ OOD Split Validation ================
+# CSV            : outputs/BGL/grouped_logs.csv
+# Samples        : 78558
+# Split Mode     : both
+# Train/Val/Test : 0.5 / 0.2 / 0.3
+# Random Seed    : 42
+
+# [ORDERED]
+
+# train -> val
+# Source/Target                  : 39279 / 15711
+# Target词表在Source覆盖率        : 52.97%
+# OOV Token Ratio                : 5.21%
+# Source/Target词分布JS散度       : 0.1955
+# Source异常率 / Target异常率     : 24.49% / 23.27%
+
+# train -> test
+# Source/Target                  : 39279 / 23568
+# Target词表在Source覆盖率        : 13.14%
+# OOV Token Ratio                : 26.82%
+# Source/Target词分布JS散度       : 0.3520
+# Source异常率 / Target异常率     : 24.49% / 24.35%
+
+# train+val -> test
+# Source/Target                  : 54990 / 23568
+# Target词表在Source覆盖率        : 15.93%
+# OOV Token Ratio                : 21.04%
+# Source/Target词分布JS散度       : 0.2894
+# Source异常率 / Target异常率     : 24.14% / 24.35%
+
+# [RANDOM]
+
+# train -> val
+# Source/Target                  : 39279 / 15711
+# Target词表在Source覆盖率        : 62.19%
+# OOV Token Ratio                : 0.34%
+# Source/Target词分布JS散度       : 0.0061
+# Source异常率 / Target异常率     : 24.26% / 24.02%
+
+# train -> test
+# Source/Target                  : 39279 / 23568
+# Target词表在Source覆盖率        : 51.37%
+# OOV Token Ratio                : 0.37%
+# Source/Target词分布JS散度       : 0.0061
+# Source异常率 / Target异常率     : 24.26% / 24.23%
+
+# train+val -> test
+# Source/Target                  : 54990 / 23568
+# Target词表在Source覆盖率        : 53.26%
+# OOV Token Ratio                : 0.35%
+# Source/Target词分布JS散度       : 0.0059
+# Source异常率 / Target异常率     : 24.20% / 24.23%
