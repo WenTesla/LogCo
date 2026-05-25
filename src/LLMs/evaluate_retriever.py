@@ -8,16 +8,18 @@ from tqdm import tqdm
 
 from config import (
     DATASET,
-    RAG_CONTRASTIVE_FETCH_MULTIPLIER,
-    RAG_RANDOM_SEED,
-    RAG_SPLIT_MODE,
-    RAG_TRAIN_RATIO,
-    RAG_USE_TRAIN_ONLY,
-    RAG_VECTOR_SOURCE,
     TOP_K,
     UNCERTAINTY_SPLIT,
 )
-from vector_store import LogVectorStore
+from vector_store import (
+    DEFAULT_CONTRASTIVE_FETCH_MULTIPLIER,
+    DEFAULT_RANDOM_SEED,
+    DEFAULT_SPLIT_MODE,
+    DEFAULT_TRAIN_RATIO,
+    DEFAULT_USE_TRAIN_ONLY,
+    DEFAULT_VECTOR_SOURCE,
+    LogVectorStore,
+)
 
 
 def _templates_to_text(value) -> str:
@@ -188,16 +190,16 @@ def main():
     parser.add_argument(
         "--fetch-multiplier",
         type=int,
-        default=RAG_CONTRASTIVE_FETCH_MULTIPLIER,
+        default=DEFAULT_CONTRASTIVE_FETCH_MULTIPLIER,
         help="对比检索候选池放大倍数",
     )
     parser.add_argument("--limit", type=int, default=0, help="只评估前 N 条，0 表示全量")
     parser.add_argument("--output-dir", default=None, help="输出目录，默认 outputs/<DATASET>/results")
     parser.add_argument("--label-col", default=None, help="标签列名；默认自动使用 Label 或二值 Unnamed 列")
-    parser.add_argument("--split-mode", default=RAG_SPLIT_MODE, choices=["ordered", "random"])
-    parser.add_argument("--train-ratio", type=float, default=RAG_TRAIN_RATIO)
-    parser.add_argument("--random-seed", type=int, default=RAG_RANDOM_SEED)
-    parser.add_argument("--vector-source", default=RAG_VECTOR_SOURCE, choices=["grouped", "structured"])
+    parser.add_argument("--split-mode", default=DEFAULT_SPLIT_MODE, choices=["ordered", "random"])
+    parser.add_argument("--train-ratio", type=float, default=DEFAULT_TRAIN_RATIO)
+    parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
+    parser.add_argument("--vector-source", default=DEFAULT_VECTOR_SOURCE, choices=["grouped", "structured"])
     parser.add_argument("--use-all-data", action="store_true", help="使用全量向量库，默认仅训练段")
     args = parser.parse_args()
 
@@ -221,7 +223,7 @@ def main():
         split_mode=args.split_mode,
         train_ratio=args.train_ratio,
         random_seed=args.random_seed,
-        use_train_only=not args.use_all_data and RAG_USE_TRAIN_ONLY,
+        use_train_only=not args.use_all_data and DEFAULT_USE_TRAIN_ONLY,
         vector_source=args.vector_source,
     )
     doc_count = store.build_from_grouped_logs()

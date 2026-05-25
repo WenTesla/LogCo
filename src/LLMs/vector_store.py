@@ -9,20 +9,21 @@ from tqdm import tqdm  # 新增
 
 from config import (
     BGE3_MODEL_NAME,
-    RAG_CONTRASTIVE_FETCH_MULTIPLIER,
     TOP_K,
     VECTOR_STORE_DIRNAME,
-    RAG_SPLIT_MODE,
-    RAG_TRAIN_RATIO,
-    RAG_RANDOM_SEED,
-    RAG_USE_TRAIN_ONLY,
-    RAG_VECTOR_SOURCE,
 )
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 
+
+DEFAULT_SPLIT_MODE = "ordered"
+DEFAULT_TRAIN_RATIO = 0.5
+DEFAULT_RANDOM_SEED = 42
+DEFAULT_USE_TRAIN_ONLY = True
+DEFAULT_VECTOR_SOURCE = "grouped"
+DEFAULT_CONTRASTIVE_FETCH_MULTIPLIER = 20
 
 
 
@@ -31,11 +32,11 @@ class LogVectorStore:
         self,
         dataset: str = "BGL",
         outputs_root: str = "outputs",
-        split_mode: str = RAG_SPLIT_MODE,
-        train_ratio: float = RAG_TRAIN_RATIO,
-        random_seed: int = RAG_RANDOM_SEED,
-        use_train_only: bool = RAG_USE_TRAIN_ONLY,
-        vector_source: str = RAG_VECTOR_SOURCE,
+        split_mode: str = DEFAULT_SPLIT_MODE,
+        train_ratio: float = DEFAULT_TRAIN_RATIO,
+        random_seed: int = DEFAULT_RANDOM_SEED,
+        use_train_only: bool = DEFAULT_USE_TRAIN_ONLY,
+        vector_source: str = DEFAULT_VECTOR_SOURCE,
     ):
         self.dataset = dataset
         self.split_mode = split_mode
@@ -287,7 +288,7 @@ class LogVectorStore:
         self,
         log: str,
         top_k: int = TOP_K,
-        fetch_multiplier: int = RAG_CONTRASTIVE_FETCH_MULTIPLIER,
+        fetch_multiplier: int = DEFAULT_CONTRASTIVE_FETCH_MULTIPLIER,
     ):
         if self.vector_db is None:
             self.build_from_grouped_logs()
@@ -304,7 +305,7 @@ class LogVectorStore:
         self,
         log: str,
         top_k: int = TOP_K,
-        fetch_multiplier: int = RAG_CONTRASTIVE_FETCH_MULTIPLIER,
+        fetch_multiplier: int = DEFAULT_CONTRASTIVE_FETCH_MULTIPLIER,
     ):
         if self.vector_db is None:
             self.build_from_grouped_logs()
@@ -321,11 +322,11 @@ class LogVectorStore:
 def build_faiss_for_dataset(
     dataset: str,
     force_rebuild: bool = False,
-    split_mode: str = RAG_SPLIT_MODE,
-    train_ratio: float = RAG_TRAIN_RATIO,
-    random_seed: int = RAG_RANDOM_SEED,
-    use_train_only: bool = RAG_USE_TRAIN_ONLY,
-    vector_source: str = RAG_VECTOR_SOURCE,
+    split_mode: str = DEFAULT_SPLIT_MODE,
+    train_ratio: float = DEFAULT_TRAIN_RATIO,
+    random_seed: int = DEFAULT_RANDOM_SEED,
+    use_train_only: bool = DEFAULT_USE_TRAIN_ONLY,
+    vector_source: str = DEFAULT_VECTOR_SOURCE,
 ):
     store = LogVectorStore(
         dataset=dataset,
@@ -343,10 +344,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="从 structured.csv 构建 BGE3 + FAISS 向量库")
     parser.add_argument("--dataset", default="BGL", help="数据集名称，例如 BGL/HDFS/Spirit/Thunderbird")
     parser.add_argument("--force-rebuild", action="store_true", help="强制重建向量库")
-    parser.add_argument("--split-mode", default=RAG_SPLIT_MODE, choices=["ordered", "random"], help="切分方式")
-    parser.add_argument("--train-ratio", type=float, default=RAG_TRAIN_RATIO, help="训练集比例")
-    parser.add_argument("--random-seed", type=int, default=RAG_RANDOM_SEED, help="随机切分种子")
-    parser.add_argument("--vector-source", default=RAG_VECTOR_SOURCE, choices=["grouped", "structured"], help="grouped=模板序列案例库, structured=单模板库")
+    parser.add_argument("--split-mode", default=DEFAULT_SPLIT_MODE, choices=["ordered", "random"], help="切分方式")
+    parser.add_argument("--train-ratio", type=float, default=DEFAULT_TRAIN_RATIO, help="训练集比例")
+    parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED, help="随机切分种子")
+    parser.add_argument("--vector-source", default=DEFAULT_VECTOR_SOURCE, choices=["grouped", "structured"], help="grouped=模板序列案例库, structured=单模板库")
     parser.add_argument(
         "--use-all-data",
         action="store_true",

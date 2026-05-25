@@ -31,17 +31,12 @@ RULES_DIR = os.getenv(
 DATASET = os.getenv("DATASET", "BGL")
 # BGE3_MODEL_NAME = os.getenv("BGE3_MODEL_NAME", "BAAI/bge-m3")
 BGE3_MODEL_NAME = os.getenv("BGE3_MODEL_NAME", "BAAI/bge-small-en-v1.5")
-VECTOR_STORE_DIRNAME = os.getenv("VECTOR_STORE_DIRNAME", "faiss_bge3")
-RAG_VECTOR_SOURCE = os.getenv("RAG_VECTOR_SOURCE", "grouped")  # grouped / structured
-RAG_CONTRASTIVE_FETCH_MULTIPLIER = int(os.getenv("RAG_CONTRASTIVE_FETCH_MULTIPLIER", "20"))
-RAG_SPLIT_MODE = os.getenv("RAG_SPLIT_MODE", "ordered")  # ordered / random
-RAG_TRAIN_RATIO = float(os.getenv("RAG_TRAIN_RATIO", "0.5"))
-RAG_RANDOM_SEED = int(os.getenv("RAG_RANDOM_SEED", "42"))
-RAG_USE_TRAIN_ONLY = os.getenv("RAG_USE_TRAIN_ONLY", "true").lower() == "true"
+VECTOR_STORE_DIRNAME = "faiss_bge3"
 
 # ===================== SM 结果输入配置 =====================
 UNCERTAINTY_SPLIT = os.getenv("UNCERTAINTY_SPLIT", "test").strip()
 HIGH_UNCERTAIN_CSV_PATH = os.getenv("HIGH_UNCERTAIN_CSV_PATH", "").strip()
+LLM_INPUT_UNIT = os.getenv("LLM_INPUT_UNIT", "sequence").strip().lower()
 
 # 二次检测决策模式：triage(正常/异常/不确定) 或 binary(仅正常/异常)
 DECISION_MODE = os.getenv("DECISION_MODE", "binary").strip().lower()

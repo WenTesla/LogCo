@@ -2,6 +2,7 @@ import json
 import ast
 from pathlib import Path
 import argparse
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, roc_auc_score
@@ -16,6 +17,7 @@ from config import (
     DATASET,
     DECISION_MODE,
     HIGH_UNCERTAIN_CSV_PATH,
+    LLM_INPUT_UNIT,
     LLM_TYPE,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
@@ -67,6 +69,7 @@ llm = get_llm()
 _VECTOR_DB_CACHE = {}
 
 VALID_RAG_CONTEXT_MODES = {"history_only", "rule_only", "hybrid"}
+VALID_LLM_INPUT_UNITS = {"sequence", "template"}
 
 
 def _normalize_rag_context_mode(mode: str = RAG_CONTEXT_MODE) -> str:
@@ -75,6 +78,16 @@ def _normalize_rag_context_mode(mode: str = RAG_CONTEXT_MODE) -> str:
         raise ValueError(
             "RAG_CONTEXT_MODE must be one of "
             f"{sorted(VALID_RAG_CONTEXT_MODES)}, got {mode!r}"
+        )
+    return normalized
+
+
+def _normalize_llm_input_unit(unit: str = LLM_INPUT_UNIT) -> str:
+    normalized = str(unit).strip().lower()
+    if normalized not in VALID_LLM_INPUT_UNITS:
+        raise ValueError(
+            "LLM_INPUT_UNIT must be one of "
+            f"{sorted(VALID_LLM_INPUT_UNITS)}, got {unit!r}"
         )
     return normalized
 
@@ -310,6 +323,26 @@ def detect(
     return parsed
 
 
+def _run_detect_for_single_item(
+    item_text: str,
+    vector_db: LogVectorStore | None,
+    decision_mode: str,
+    rag_context_mode: str,
+    verbose: bool,
+    score_text: str = "N/A",
+    uncertainty_text: str = "N/A",
+):
+    return detect(
+        item_text,
+        vector_db=vector_db,
+        small_model_score=score_text,
+        small_model_uncertainty=uncertainty_text,
+        verbose=verbose,
+        decision_mode=decision_mode,
+        rag_context_mode=rag_context_mode,
+    )
+
+
 def _templates_to_text(raw_value):
     if isinstance(raw_value, list):
         return " ".join(str(item) for item in raw_value)
@@ -326,6 +359,149 @@ def _templates_to_text(raw_value):
     except Exception:
         pass
     return text
+
+
+def _templates_to_items(raw_value) -> list[str]:
+    if isinstance(raw_value, list):
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+    if pd.isna(raw_value):
+        return []
+
+    text = str(raw_value).strip()
+    if not text:
+        return []
+    try:
+        parsed = ast.literal_eval(text)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+    return [text]
+
+
+def _build_sequence_indexed_df(df: pd.DataFrame) -> pd.DataFrame:
+    if "Templates" not in df.columns:
+        raise ValueError("缺少 Templates 列")
+    out = df.copy()
+    out["log_text"] = out["Templates"].apply(_templates_to_text)
+    out["log_items"] = out["Templates"].apply(_templates_to_items)
+    return out
+
+
+def _build_template_indexed_df(df: pd.DataFrame) -> pd.DataFrame:
+    if "Templates" not in df.columns:
+        raise ValueError("缺少 Templates 列")
+    rows = []
+    for idx, row in df.iterrows():
+        items = _templates_to_items(row["Templates"])
+        if not items:
+            item_row = row.to_dict()
+            item_row["template_text"] = ""
+            item_row["template_pos"] = None
+            item_row["log_text"] = ""
+            item_row["window_text"] = _templates_to_text(row["Templates"])
+            item_row["source_row_index"] = idx
+            rows.append(item_row)
+            continue
+        for pos, item in enumerate(items):
+            item_row = row.to_dict()
+            item_row["template_text"] = item
+            item_row["template_pos"] = pos
+            item_row["log_text"] = item
+            item_row["window_text"] = _templates_to_text(row["Templates"])
+            item_row["source_row_index"] = idx
+            rows.append(item_row)
+    return pd.DataFrame(rows)
+
+
+def _first_present(series: pd.Series):
+    present = series.dropna()
+    if present.empty:
+        return np.nan
+    return present.iloc[0]
+
+
+def _join_present(series: pd.Series, limit: int = 5) -> str:
+    values = [str(v) for v in series.dropna().tolist() if str(v).strip()]
+    if not values:
+        return ""
+    deduped = list(dict.fromkeys(values))
+    return " | ".join(deduped[:limit])
+
+
+def _aggregate_template_rows_to_windows(template_rows: pd.DataFrame, original_df: pd.DataFrame) -> pd.DataFrame:
+    grouped = template_rows.groupby("source_row_index", sort=False)
+    rows = []
+    for source_idx, group in grouped:
+        base = original_df.loc[source_idx].to_dict()
+        statuses = group["llm_status"].dropna().astype(str).str.lower()
+        if (statuses == "anomaly").any():
+            status = "anomaly"
+        elif (statuses == "normal").any():
+            status = "normal"
+        else:
+            status = np.nan
+
+        levels = group["llm_level"].dropna().astype(str).str.lower()
+        if "high" in set(levels):
+            level = "high"
+        elif "medium" in set(levels):
+            level = "medium"
+        elif "low" in set(levels):
+            level = "low"
+        else:
+            level = _first_present(group["llm_level"])
+
+        anomalous_templates = group.loc[group["llm_status"].astype(str).str.lower() == "anomaly", "template_text"]
+        if not anomalous_templates.empty:
+            reason = "Template-level aggregation: anomaly templates = " + "; ".join(
+                anomalous_templates.dropna().astype(str).drop_duplicates().head(5).tolist()
+            )
+        else:
+            reason = "Template-level aggregation: no template was classified as anomaly."
+
+        base.update(
+            {
+                "source_row_index": source_idx,
+                "log_text": group["window_text"].iloc[0],
+                "dup_count": int(len(group)),
+                "rag_context_mode": _first_present(group["rag_context_mode"]),
+                "llm_status": status,
+                "llm_level": level,
+                "llm_reason": reason,
+                "llm_suggestion": _join_present(group["llm_suggestion"]),
+                "llm_raw_output": _join_present(group["llm_raw_output"]),
+                "llm_pred": 1 if status == "anomaly" else (0 if status == "normal" else np.nan),
+                "template_llm_details": json.dumps(
+                    [
+                        {
+                            "template_pos": None if pd.isna(row.template_pos) else int(row.template_pos),
+                            "template_text": row.template_text,
+                            "llm_status": row.llm_status,
+                            "llm_level": row.llm_level,
+                            "llm_reason": row.llm_reason,
+                        }
+                        for row in group.itertuples(index=False)
+                    ],
+                    ensure_ascii=False,
+                ),
+                "retrieved_labels": _first_present(group["retrieved_labels"]),
+                "retrieved_normal_count": group["retrieved_normal_count"].max(),
+                "retrieved_anomaly_count": group["retrieved_anomaly_count"].max(),
+                "retrieved_unknown_count": group["retrieved_unknown_count"].max(),
+                "retrieved_refs": _first_present(group["retrieved_refs"]),
+                "retrieved_normal_refs": _first_present(group["retrieved_normal_refs"]),
+                "retrieved_anomaly_refs": _first_present(group["retrieved_anomaly_refs"]),
+            }
+        )
+        rows.append(base)
+    return pd.DataFrame(rows)
+
+
+def _llm_output_prefix(base_prefix: str, llm_input_unit: str, rag_context_mode: str) -> str:
+    if llm_input_unit == "sequence":
+        return f"{base_prefix}_{rag_context_mode}_contrastive"
+    return f"{base_prefix}_{llm_input_unit}_{rag_context_mode}_contrastive"
 
 # ===================== 主流程 =====================
 
@@ -375,101 +551,149 @@ def _run_llm_rag_on_df(
     output_prefix: str,
     input_csv: Path,
     rag_context_mode: str = RAG_CONTEXT_MODE,
+    llm_input_unit: str = LLM_INPUT_UNIT,
     verbose: bool = True,
 ):
     rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
-    if "Templates" not in df.columns:
-        raise ValueError(f"{input_csv} 缺少 Templates 列")
-
-    # 去重键：按标准化后的日志文本去重，避免重复调用 LLM
+    llm_input_unit = _normalize_llm_input_unit(llm_input_unit)
     df = df.copy()
-    df["log_text"] = df["Templates"].apply(_templates_to_text)
-    grouped = df.groupby("log_text", dropna=False)
+    status_to_pred = {"normal": 0, "anomaly": 1}
 
-    if "AnomalyScore" in df.columns:
-        score_series = grouped["AnomalyScore"].mean().fillna("N/A")
-    else:
-        score_series = pd.Series("N/A", index=grouped.size().index)
+    if llm_input_unit == "sequence":
+        if "Templates" not in df.columns:
+            raise ValueError(f"{input_csv} 缺少 Templates 列")
+        df["log_text"] = df["Templates"].apply(_templates_to_text)
+        grouped = df.groupby("log_text", dropna=False)
+        if "AnomalyScore" in df.columns:
+            score_series = grouped["AnomalyScore"].mean().fillna("N/A")
+        else:
+            score_series = pd.Series("N/A", index=grouped.size().index)
+        if "Uncertainty" in df.columns:
+            unc_series = grouped["Uncertainty"].mean().fillna("N/A")
+        else:
+            unc_series = pd.Series("N/A", index=grouped.size().index)
 
-    if "Uncertainty" in df.columns:
-        unc_series = grouped["Uncertainty"].mean().fillna("N/A")
-    else:
-        unc_series = pd.Series("N/A", index=grouped.size().index)
-
-    unique_df = pd.DataFrame(
-        {
-            "log_text": grouped.size().index,
-            "dup_count": grouped.size().values,
-            "small_model_score_mean": [score_series.loc[k] for k in grouped.size().index],
-            "small_model_uncertainty_mean": [unc_series.loc[k] for k in grouped.size().index],
-        }
-    )
-
-    results = []
-    pbar = tqdm(unique_df.itertuples(index=False), total=len(unique_df), desc="LLM+RAG检测(去重后)")
-    for row in pbar:
-        parsed = detect(
-            row.log_text,
-            vector_db=vector_db,
-            small_model_score=str(row.small_model_score_mean),
-            small_model_uncertainty=str(row.small_model_uncertainty_mean),
-            verbose=verbose,
-            decision_mode=decision_mode,
-            rag_context_mode=rag_context_mode,
-        )
-        results.append(
+        unique_df = pd.DataFrame(
             {
-                "log_text": row.log_text,
-                "rag_context_mode": parsed["rag_context_mode"],
-                "llm_status": parsed["status"],
-                "llm_level": parsed["level"],
-                "llm_reason": parsed["reason"],
-                "llm_suggestion": parsed["suggestion"],
-                "llm_raw_output": parsed["llm_raw_output"],
-                "retrieved_labels": json.dumps(parsed["retrieval"]["retrieved_labels"], ensure_ascii=False),
-                "retrieved_normal_count": parsed["retrieval"]["retrieved_normal_count"],
-                "retrieved_anomaly_count": parsed["retrieval"]["retrieved_anomaly_count"],
-                "retrieved_unknown_count": parsed["retrieval"]["retrieved_unknown_count"],
-                "retrieved_refs": json.dumps(parsed["retrieval"]["retrieved_refs"], ensure_ascii=False),
-                "retrieved_normal_refs": json.dumps(parsed["retrieval"]["retrieved_normal_refs"], ensure_ascii=False),
-                "retrieved_anomaly_refs": json.dumps(parsed["retrieval"]["retrieved_anomaly_refs"], ensure_ascii=False),
+                "log_text": grouped.size().index,
+                "dup_count": grouped.size().values,
+                "small_model_score_mean": [score_series.loc[k] for k in grouped.size().index],
+                "small_model_uncertainty_mean": [unc_series.loc[k] for k in grouped.size().index],
             }
         )
 
-    result_df = pd.DataFrame(results)
-    unique_result_df = unique_df.merge(result_df, on="log_text", how="left")
-    status_to_pred = {"normal": 0, "anomaly": 1}
-    unique_result_df["llm_pred"] = unique_result_df["llm_status"].map(status_to_pred)
-    # 映射回原始样本，保证后续指标按原样本统计
-    df_out = df.merge(
-        unique_result_df[
-            [
-                "log_text",
-                "dup_count",
-                "rag_context_mode",
-                "llm_status",
-                "llm_level",
-                "llm_reason",
-                "llm_suggestion",
-                "llm_raw_output",
-                "llm_pred",
-                "retrieved_labels",
-                "retrieved_normal_count",
-                "retrieved_anomaly_count",
-                "retrieved_unknown_count",
-                "retrieved_refs",
-                "retrieved_normal_refs",
-                "retrieved_anomaly_refs",
-            ]
-        ],
-        on="log_text",
-        how="left",
-    )
+        results = []
+        pbar = tqdm(unique_df.itertuples(index=False), total=len(unique_df), desc="LLM+RAG检测(序列去重后)")
+        for row in pbar:
+            parsed = _run_detect_for_single_item(
+                row.log_text,
+                vector_db=vector_db,
+                decision_mode=decision_mode,
+                rag_context_mode=rag_context_mode,
+                verbose=verbose,
+                score_text=str(row.small_model_score_mean),
+                uncertainty_text=str(row.small_model_uncertainty_mean),
+            )
+            results.append(
+                {
+                    "log_text": row.log_text,
+                    "rag_context_mode": parsed["rag_context_mode"],
+                    "llm_status": parsed["status"],
+                    "llm_level": parsed["level"],
+                    "llm_reason": parsed["reason"],
+                    "llm_suggestion": parsed["suggestion"],
+                    "llm_raw_output": parsed["llm_raw_output"],
+                    "retrieved_labels": json.dumps(parsed["retrieval"]["retrieved_labels"], ensure_ascii=False),
+                    "retrieved_normal_count": parsed["retrieval"]["retrieved_normal_count"],
+                    "retrieved_anomaly_count": parsed["retrieval"]["retrieved_anomaly_count"],
+                    "retrieved_unknown_count": parsed["retrieval"]["retrieved_unknown_count"],
+                    "retrieved_refs": json.dumps(parsed["retrieval"]["retrieved_refs"], ensure_ascii=False),
+                    "retrieved_normal_refs": json.dumps(parsed["retrieval"]["retrieved_normal_refs"], ensure_ascii=False),
+                    "retrieved_anomaly_refs": json.dumps(parsed["retrieval"]["retrieved_anomaly_refs"], ensure_ascii=False),
+                }
+            )
+
+        result_df = pd.DataFrame(results)
+        unique_result_df = unique_df.merge(result_df, on="log_text", how="left")
+        unique_result_df["llm_pred"] = unique_result_df["llm_status"].map(status_to_pred)
+        unique_result_df["llm_input_unit"] = llm_input_unit
+        df_out = df.merge(
+            unique_result_df[
+                [
+                    "log_text",
+                    "dup_count",
+                    "rag_context_mode",
+                    "llm_status",
+                    "llm_level",
+                    "llm_reason",
+                    "llm_suggestion",
+                    "llm_raw_output",
+                    "llm_pred",
+                    "retrieved_labels",
+                    "retrieved_normal_count",
+                    "retrieved_anomaly_count",
+                    "retrieved_unknown_count",
+                    "retrieved_refs",
+                    "retrieved_normal_refs",
+                    "retrieved_anomaly_refs",
+                ]
+            ],
+            on="log_text",
+            how="left",
+        )
+    elif llm_input_unit == "template":
+        template_df = _build_template_indexed_df(df)
+        if template_df.empty:
+            raise ValueError(f"{input_csv} 没有可展开的模板")
+        template_df["small_model_score_mean"] = template_df["AnomalyScore"] if "AnomalyScore" in template_df.columns else "N/A"
+        template_df["small_model_uncertainty_mean"] = template_df["Uncertainty"] if "Uncertainty" in template_df.columns else "N/A"
+        unique_template_df = template_df.drop_duplicates(subset=["log_text"]).copy()
+        results = []
+        pbar = tqdm(unique_template_df.itertuples(index=False), total=len(unique_template_df), desc="LLM+RAG检测(单模板去重后)")
+        for row in pbar:
+            parsed = _run_detect_for_single_item(
+                row.log_text,
+                vector_db=vector_db,
+                decision_mode=decision_mode,
+                rag_context_mode=rag_context_mode,
+                verbose=verbose,
+                score_text=str(row.small_model_score_mean),
+                uncertainty_text=str(row.small_model_uncertainty_mean),
+            )
+            results.append(
+                {
+                    "log_text": row.log_text,
+                    "rag_context_mode": parsed["rag_context_mode"],
+                    "llm_status": parsed["status"],
+                    "llm_level": parsed["level"],
+                    "llm_reason": parsed["reason"],
+                    "llm_suggestion": parsed["suggestion"],
+                    "llm_raw_output": parsed["llm_raw_output"],
+                    "retrieved_labels": json.dumps(parsed["retrieval"]["retrieved_labels"], ensure_ascii=False),
+                    "retrieved_normal_count": parsed["retrieval"]["retrieved_normal_count"],
+                    "retrieved_anomaly_count": parsed["retrieval"]["retrieved_anomaly_count"],
+                    "retrieved_unknown_count": parsed["retrieval"]["retrieved_unknown_count"],
+                    "retrieved_refs": json.dumps(parsed["retrieval"]["retrieved_refs"], ensure_ascii=False),
+                    "retrieved_normal_refs": json.dumps(parsed["retrieval"]["retrieved_normal_refs"], ensure_ascii=False),
+                    "retrieved_anomaly_refs": json.dumps(parsed["retrieval"]["retrieved_anomaly_refs"], ensure_ascii=False),
+                }
+            )
+
+        result_df = pd.DataFrame(results)
+        unique_result_df = unique_template_df.merge(result_df, on="log_text", how="left")
+        unique_result_df["llm_pred"] = unique_result_df["llm_status"].map(status_to_pred)
+        unique_result_df["llm_input_unit"] = llm_input_unit
+
+        template_rows = template_df.merge(unique_result_df, on="log_text", how="left", suffixes=("", "_llm"))
+        df_out = _aggregate_template_rows_to_windows(template_rows, df)
+    else:
+        raise ValueError(f"Unsupported LLM_INPUT_UNIT: {llm_input_unit}")
 
     out_dir = Path("outputs") / dataset / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_csv = out_dir / f"{output_prefix}.csv"
     unique_out_csv = out_dir / f"{output_prefix}_unique.csv"
+    df_out["llm_input_unit"] = llm_input_unit
 
     df_out.to_csv(out_csv, index=False, encoding="utf-8")
     unique_result_df.to_csv(unique_out_csv, index=False, encoding="utf-8")
@@ -507,24 +731,31 @@ def second_pass_for_high_uncertain(
     dataset: str = DATASET,
     decision_mode: str = DECISION_MODE,
     rag_context_mode: str = RAG_CONTEXT_MODE,
+    llm_input_unit: str = LLM_INPUT_UNIT,
     verbose: bool = True,
 ):
     rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
+    llm_input_unit = _normalize_llm_input_unit(llm_input_unit)
     vector_db = _get_vector_db(dataset) if _uses_history(rag_context_mode) else None
     input_csv = _resolve_uncertain_csv_path(dataset)
     df = pd.read_csv(input_csv)
     print(
         f"✅ 发现高不确定样本文件: {input_csv}，共 {len(df)} 条样本，"
-        f"RAG_CONTEXT_MODE={rag_context_mode}, 历史日志检索=contrastive。"
+        f"RAG_CONTEXT_MODE={rag_context_mode}, LLM_INPUT_UNIT={llm_input_unit}, 历史日志检索=contrastive。"
     )
     return _run_llm_rag_on_df(
         df=df,
         vector_db=vector_db,
         dataset=dataset,
         decision_mode=decision_mode,
-        output_prefix=f"llm_second_pass_{UNCERTAINTY_SPLIT}_high_uncertain_{rag_context_mode}_contrastive",
+        output_prefix=_llm_output_prefix(
+            f"llm_second_pass_{UNCERTAINTY_SPLIT}_high_uncertain",
+            llm_input_unit,
+            rag_context_mode,
+        ),
         input_csv=input_csv,
         rag_context_mode=rag_context_mode,
+        llm_input_unit=llm_input_unit,
         verbose=verbose,
     )
 
@@ -533,9 +764,11 @@ def full_test_llm_rag(
     dataset: str = DATASET,
     decision_mode: str = DECISION_MODE,
     rag_context_mode: str = RAG_CONTEXT_MODE,
+    llm_input_unit: str = LLM_INPUT_UNIT,
     verbose: bool = True,
 ):
     rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
+    llm_input_unit = _normalize_llm_input_unit(llm_input_unit)
     vector_db = _get_vector_db(dataset) if _uses_history(rag_context_mode) else None
     input_csv = _resolve_full_test_csv_path(dataset)
     df = pd.read_csv(input_csv)
@@ -544,9 +777,14 @@ def full_test_llm_rag(
         vector_db=vector_db,
         dataset=dataset,
         decision_mode=decision_mode,
-        output_prefix=f"llm_full_test_rag_{rag_context_mode}_contrastive",
+        output_prefix=_llm_output_prefix(
+            "llm_full_test_rag",
+            llm_input_unit,
+            rag_context_mode,
+        ),
         input_csv=input_csv,
         rag_context_mode=rag_context_mode,
+        llm_input_unit=llm_input_unit,
         verbose=verbose,
     )
 
@@ -572,17 +810,25 @@ if __name__ == "__main__":
         default=False,
         help="打印每条日志的完整提示词",
     )
+    parser.add_argument(
+        "--llm-input-unit",
+        default=LLM_INPUT_UNIT,
+        choices=sorted(VALID_LLM_INPUT_UNITS),
+        help="sequence=整窗口模板序列调用LLM, template=窗口内单模板逐条调用LLM并聚合",
+    )
     args = parser.parse_args()
     if args.scope == "full_test":
         full_test_llm_rag(
             dataset=args.dataset,
             rag_context_mode=args.rag_context_mode,
+            llm_input_unit=args.llm_input_unit,
             verbose=args.verbose,
         )
     else:
         second_pass_for_high_uncertain(
             dataset=args.dataset,
             rag_context_mode=args.rag_context_mode,
+            llm_input_unit=args.llm_input_unit,
             verbose=args.verbose,
         )
 
