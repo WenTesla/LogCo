@@ -120,18 +120,4 @@ class RuleStore:
         ]
 
 
-def format_rules_for_prompt(rules: List[dict]) -> str:
-    if not rules:
-        return "No dataset-specific decision rules were retrieved."
 
-    lines = []
-    for rule in rules:
-        matched = ", ".join(rule["matched_keywords"]) if rule["matched_keywords"] else "N/A"
-        keywords = ", ".join(rule["keywords"]) if rule["keywords"] else "N/A"
-        lines.append(
-            f"[{rule['ref']}] decision={rule['decision']}, priority={rule['priority']}, "
-            f"matched_keywords={matched}, keywords={keywords}\n"
-            f"condition: {rule['condition']}\n"
-            f"rationale: {rule['rationale']}"
-        )
-    return "\n\n".join(lines)

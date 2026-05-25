@@ -14,14 +14,13 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
 
 # modelscope.cn/Qwen/Qwen3-14B-GGUF
 # modelscope.cn/Qwen/Qwen3-30B-A3B-GGUF:latest
+# modelscope.cn/Qwen/Qwen3-8B-GGUF:latest
 
-OLLAMA_MODEL = "modelscope.cn/Qwen/Qwen3-30B-A3B-GGUF:latest"
+OLLAMA_MODEL = "modelscope.cn/Qwen/Qwen3-8B-GGUF:latest"
 OLLAMA_BASE_URL = "http://localhost:11434"
 TOP_K = 3
-RULE_RAG_ENABLED = os.getenv("RULE_RAG_ENABLED", "true").lower() == "true"
 RAG_CONTEXT_MODE = os.getenv(
-    "RAG_CONTEXT_MODE",
-    "hybrid" if RULE_RAG_ENABLED else "history_only",
+    "RAG_CONTEXT_MODE", "rule_only"
 ).strip().lower()  # history_only / rule_only / hybrid
 RULES_DIR = os.getenv(
     "RULES_DIR",

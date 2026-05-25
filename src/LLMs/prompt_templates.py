@@ -72,26 +72,13 @@ Return a JSON object with the following schema:
 """.strip()
 
 
-RAG_USER_PROMPT_BINARY_WITH_RULES = """
-Target log event:
-{target_log}
-
-Retrieved decision rules:
-{retrieved_rules}
-
-Retrieved references (top-k, sorted by similarity descending):
-{retrieved_logs}
-
-""".strip()
-
-
 RAG_SYSTEM_PROMPT_BINARY_RULE_ONLY = """
 You are an expert in system log analysis and anomaly detection.
 
 # Task:
-Given a target log sequence, determine whether it is ANOMALY or NORMAL using:
-1) The target log sequence, where dynamic variables may be masked with `<*>`.
-2) Retrieved decision rules from a dataset-specific rule knowledge base.
+Given a target log sequence, determine whether it is ANOMALY or NORMAL using.
+The target log sequence, where dynamic variables may be masked with `<*>`.
+
 
 # Rules:
 - Apply retrieved decision rules by priority.
@@ -114,10 +101,79 @@ RAG_USER_PROMPT_BINARY_RULE_ONLY = """
 Target log event:
 {target_log}
 
-Retrieved decision rules:
-{retrieved_rules}
-
 """.strip()
+
+
+BGL_EMBEDDED_RULES = """
+# Dataset-specific rules for BGL:
+- Recovery/correction evidence: classify as NORMAL when the sequence clearly
+  contains corrected, repaired, recovered, recovery, retry-success, CE check, or
+  other explicit recovery evidence, unless a later unrecovered fatal failure is
+  present.
+- Hardware/kernel failure evidence: classify as ANOMALY when the sequence
+  contains unrecovered interrupt, panic, severe, fatal, corruption, hardware
+  failure, machine check, parity error, Microloader Assertion, or data storage
+  interrupt evidence.
+- ciod/application failure evidence: classify as ANOMALY when ciod login,
+  node-map, program-loading, or debugger operations fail due to Input/output
+  error, Device or resource busy, Resource temporarily unavailable, No child
+  processes, Cannot allocate memory, communication error, or unexpected EOF.
+- Permission and user/environment issues: do not classify as ANOMALY solely
+  because of Permission denied, No such file or directory, invalid user path, or
+  argument-list errors unless the sequence also contains unrecovered system,
+  hardware, I/O, or resource-failure evidence.
+- Normal operational/status evidence: boot checks, status lines, enabled flags,
+  routine checks, and successful exits are NORMAL unless accompanied by
+  unrecovered fatal evidence.
+""".strip()
+
+
+SPIRIT_EMBEDDED_RULES = """
+# Dataset-specific rules for Spirit:
+- Recovery/success evidence: classify as NORMAL when the sequence clearly
+  contains corrected, repaired, recovered, completed, succeeded, healthy, or
+  successful service/mount/status evidence, unless a later unrecovered fatal
+  failure appears.
+- Service/fatal failure evidence: classify as ANOMALY when the sequence
+  contains unrecovered fatal, panic, crash, corruption, aborted, failed
+  operation, unrecoverable, or persistent failure evidence.
+- Network/filesystem evidence: classify as ANOMALY when NFS, network, mount, or
+  service operations explicitly fail, time out, disconnect, or lose connection
+  without later successful recovery.
+- Authentication failures: do not classify as ANOMALY solely because of a single
+  authentication failure; treat it as ANOMALY only when it is part of a broader
+  unrecovered service/security failure pattern.
+- Out-of-memory and kernel panic evidence: classify as ANOMALY when memory kill,
+  panic, firmware panic, or kernel-level fatal evidence is present and not
+  followed by recovery.
+""".strip()
+
+
+def _append_dataset_rules(system_prompt: str, dataset: str | None) -> str:
+    dataset_key = str(dataset or "").strip().lower()
+    if dataset_key == "bgl":
+        return f"{system_prompt}\n\n{BGL_EMBEDDED_RULES}"
+    if dataset_key == "spirit":
+        return f"{system_prompt}\n\n{SPIRIT_EMBEDDED_RULES}"
+    return system_prompt
+
+
+def get_rag_prompts(dataset: str | None, rag_context_mode: str):
+    mode = str(rag_context_mode).strip().lower()
+    if mode == "history_only":
+        system_prompt = RAG_SYSTEM_PROMPT_BINARY
+        user_prompt = RAG_USER_PROMPT_BINARY
+    elif mode == "rule_only":
+        system_prompt = RAG_SYSTEM_PROMPT_BINARY_RULE_ONLY
+        user_prompt = RAG_USER_PROMPT_BINARY_RULE_ONLY
+    elif mode == "hybrid":
+        system_prompt = RAG_SYSTEM_PROMPT_BINARY_WITH_RULES
+        user_prompt = RAG_USER_PROMPT_BINARY
+    else:
+        raise ValueError(f"Unsupported rag_context_mode: {rag_context_mode}")
+
+    return _append_dataset_rules(system_prompt, dataset), user_prompt
+
 
 LOG_ANOMALY_PROMPT = """
 System instruction:

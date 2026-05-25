@@ -8,14 +8,9 @@ from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, r
 
 from prompt_templates import (
     LOG_ANOMALY_PROMPT,
-    RAG_SYSTEM_PROMPT_BINARY,
-    RAG_SYSTEM_PROMPT_BINARY_RULE_ONLY,
-    RAG_SYSTEM_PROMPT_BINARY_WITH_RULES,
-    RAG_USER_PROMPT_BINARY,
-    RAG_USER_PROMPT_BINARY_RULE_ONLY,
-    RAG_USER_PROMPT_BINARY_WITH_RULES,
+    get_rag_prompts,
 )
-from rule_store import RuleStore, format_rules_for_prompt
+
 from vector_store import LogVectorStore
 from config import (
     DATASET,
@@ -70,7 +65,7 @@ def get_llm():
 # 初始化
 llm = get_llm()
 _VECTOR_DB_CACHE = {}
-_RULE_STORE_CACHE = {}
+
 VALID_RAG_CONTEXT_MODES = {"history_only", "rule_only", "hybrid"}
 
 
@@ -88,10 +83,6 @@ def _uses_history(mode: str) -> bool:
     return mode in {"history_only", "hybrid"}
 
 
-def _uses_rules(mode: str) -> bool:
-    return mode in {"rule_only", "hybrid"}
-
-
 def _get_vector_db(dataset: str) -> LogVectorStore:
     if dataset not in _VECTOR_DB_CACHE:
         store = LogVectorStore(dataset=dataset)
@@ -99,14 +90,6 @@ def _get_vector_db(dataset: str) -> LogVectorStore:
         print(f"✅ 已加载向量库: dataset={dataset}, 文档数={doc_count}")
         _VECTOR_DB_CACHE[dataset] = store
     return _VECTOR_DB_CACHE[dataset]
-
-
-def _get_rule_store(dataset: str) -> RuleStore:
-    if dataset not in _RULE_STORE_CACHE:
-        store = RuleStore(dataset=dataset)
-        print(f"✅ 已加载规则库: dataset={dataset}, 规则数={len(store.rules)}")
-        _RULE_STORE_CACHE[dataset] = store
-    return _RULE_STORE_CACHE[dataset]
 
 
 def _extract_content(result):
@@ -253,7 +236,6 @@ def _apply_precision_guard(parsed: dict, diagnostics: dict, decision_mode: str) 
 def detect(
     log: str,
     vector_db: LogVectorStore | None = None,
-    rule_store: RuleStore | None = None,
     small_model_score: str = "N/A",
     small_model_uncertainty: str = "N/A",
     verbose: bool = True,
@@ -261,9 +243,6 @@ def detect(
     rag_context_mode: str = RAG_CONTEXT_MODE,
 ):
     rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
-    if verbose:
-        print("\n" + "="*60)
-        print(f"日志：{log}")
 
     # 1. 按消融模式检索历史日志和/或规则
     if _uses_history(rag_context_mode):
@@ -285,33 +264,17 @@ def detect(
     diagnostics["retrieved_normal_refs"] = normal_diagnostics["retrieved_refs"]
     diagnostics["retrieved_anomaly_refs"] = anomaly_diagnostics["retrieved_refs"]
     diagnostics["contrastive_top_k_per_class"] = TOP_K
-    if _uses_rules(rag_context_mode):
-        rule_store = rule_store or _get_rule_store(DATASET)
-        retrieved_rules = rule_store.search(log)
-        rule_context = format_rules_for_prompt(retrieved_rules)
-    else:
-        retrieved_rules = []
-        rule_context = ""
 
     # 2. 构造提示词
     mode = str(decision_mode).strip().lower()
     if mode == "binary":
-        if rag_context_mode == "history_only":
-            system_prompt = RAG_SYSTEM_PROMPT_BINARY
-            user_prompt_template = RAG_USER_PROMPT_BINARY
-        elif rag_context_mode == "rule_only":
-            system_prompt = RAG_SYSTEM_PROMPT_BINARY_RULE_ONLY
-            user_prompt_template = RAG_USER_PROMPT_BINARY_RULE_ONLY
-        else:
-            system_prompt = RAG_SYSTEM_PROMPT_BINARY_WITH_RULES
-            user_prompt_template = RAG_USER_PROMPT_BINARY_WITH_RULES
+        system_prompt, user_prompt_template = get_rag_prompts(DATASET, rag_context_mode)
     else:
         system_prompt = ""
         user_prompt_template = ""
 
     user_prompt = user_prompt_template.format(
         retrieved_logs=context,
-        retrieved_rules=rule_context,
         target_log=log,
         small_model_score=small_model_score,
         small_model_uncertainty=small_model_uncertainty,
@@ -320,7 +283,8 @@ def detect(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
-    # print(f"\n🧠 构造的提示词:\n{prompt}")
+    if verbose:
+        print(f"\n🧠 构造的提示词:\n{prompt}")
     # 3. LLM 调用
     result = llm.invoke(prompt)
     content = _extract_content(result)
@@ -331,7 +295,6 @@ def detect(
         parsed = _apply_precision_guard(parsed, diagnostics, decision_mode=decision_mode)
     parsed["llm_raw_output"] = content
     parsed["retrieval"] = diagnostics
-    parsed["rules"] = retrieved_rules
     parsed["rag_context_mode"] = rag_context_mode
     if verbose:
         print(f"异常状态：{parsed['status']}")
@@ -344,7 +307,6 @@ def detect(
             f"anomaly={diagnostics['retrieved_anomaly_count']}, "
             f"unknown={diagnostics['retrieved_unknown_count']}"
         )
-        print(f"命中规则：{[rule['rule_id'] for rule in retrieved_rules]}")
     return parsed
 
 
@@ -413,6 +375,7 @@ def _run_llm_rag_on_df(
     output_prefix: str,
     input_csv: Path,
     rag_context_mode: str = RAG_CONTEXT_MODE,
+    verbose: bool = True,
 ):
     rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
     if "Templates" not in df.columns:
@@ -442,17 +405,15 @@ def _run_llm_rag_on_df(
         }
     )
 
-    rule_store = _get_rule_store(dataset) if _uses_rules(rag_context_mode) else None
     results = []
     pbar = tqdm(unique_df.itertuples(index=False), total=len(unique_df), desc="LLM+RAG检测(去重后)")
     for row in pbar:
         parsed = detect(
             row.log_text,
             vector_db=vector_db,
-            rule_store=rule_store,
             small_model_score=str(row.small_model_score_mean),
             small_model_uncertainty=str(row.small_model_uncertainty_mean),
-            verbose=False,
+            verbose=verbose,
             decision_mode=decision_mode,
             rag_context_mode=rag_context_mode,
         )
@@ -472,11 +433,6 @@ def _run_llm_rag_on_df(
                 "retrieved_refs": json.dumps(parsed["retrieval"]["retrieved_refs"], ensure_ascii=False),
                 "retrieved_normal_refs": json.dumps(parsed["retrieval"]["retrieved_normal_refs"], ensure_ascii=False),
                 "retrieved_anomaly_refs": json.dumps(parsed["retrieval"]["retrieved_anomaly_refs"], ensure_ascii=False),
-                "retrieved_rule_ids": json.dumps(
-                    [rule["rule_id"] for rule in parsed["rules"]],
-                    ensure_ascii=False,
-                ),
-                "retrieved_rules": json.dumps(parsed["rules"], ensure_ascii=False),
             }
         )
 
@@ -504,8 +460,6 @@ def _run_llm_rag_on_df(
                 "retrieved_refs",
                 "retrieved_normal_refs",
                 "retrieved_anomaly_refs",
-                "retrieved_rule_ids",
-                "retrieved_rules",
             ]
         ],
         on="log_text",
@@ -553,6 +507,7 @@ def second_pass_for_high_uncertain(
     dataset: str = DATASET,
     decision_mode: str = DECISION_MODE,
     rag_context_mode: str = RAG_CONTEXT_MODE,
+    verbose: bool = True,
 ):
     rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
     vector_db = _get_vector_db(dataset) if _uses_history(rag_context_mode) else None
@@ -570,6 +525,7 @@ def second_pass_for_high_uncertain(
         output_prefix=f"llm_second_pass_{UNCERTAINTY_SPLIT}_high_uncertain_{rag_context_mode}_contrastive",
         input_csv=input_csv,
         rag_context_mode=rag_context_mode,
+        verbose=verbose,
     )
 
 
@@ -577,6 +533,7 @@ def full_test_llm_rag(
     dataset: str = DATASET,
     decision_mode: str = DECISION_MODE,
     rag_context_mode: str = RAG_CONTEXT_MODE,
+    verbose: bool = True,
 ):
     rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
     vector_db = _get_vector_db(dataset) if _uses_history(rag_context_mode) else None
@@ -590,6 +547,7 @@ def full_test_llm_rag(
         output_prefix=f"llm_full_test_rag_{rag_context_mode}_contrastive",
         input_csv=input_csv,
         rag_context_mode=rag_context_mode,
+        verbose=verbose,
     )
 
 
@@ -608,14 +566,25 @@ if __name__ == "__main__":
         choices=sorted(VALID_RAG_CONTEXT_MODES),
         help="history_only=仅历史日志RAG, rule_only=仅规则RAG, hybrid=规则+历史日志RAG",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="打印每条日志的完整提示词",
+    )
     args = parser.parse_args()
     if args.scope == "full_test":
         full_test_llm_rag(
             dataset=args.dataset,
             rag_context_mode=args.rag_context_mode,
+            verbose=args.verbose,
         )
     else:
         second_pass_for_high_uncertain(
             dataset=args.dataset,
             rag_context_mode=args.rag_context_mode,
+            verbose=args.verbose,
         )
+
+
+# 二次检测(样本级) TP=68 FP=1176 TN=1232 FN=98 | Precision=0.0547 Recall=0.4096 F1=0.0965 | 覆盖率=100.00%
