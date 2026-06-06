@@ -19,13 +19,6 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
 OLLAMA_MODEL = "modelscope.cn/Qwen/Qwen3-8B-GGUF:latest"
 OLLAMA_BASE_URL = "http://localhost:11434"
 TOP_K = 3
-RAG_CONTEXT_MODE = os.getenv(
-    "RAG_CONTEXT_MODE", "rule_only"
-).strip().lower()  # history_only / rule_only / hybrid
-RULES_DIR = os.getenv(
-    "RULES_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules"),
-)
 
 # ===================== RAG 配置 =====================
 DATASET = os.getenv("DATASET", "BGL")

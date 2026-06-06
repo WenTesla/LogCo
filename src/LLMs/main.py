@@ -9,7 +9,7 @@ from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, r
 
 from prompt_templates import (
     LOG_ANOMALY_PROMPT,
-    get_rag_prompts,
+    RAG_USER_PROMPT,
 )
 
 from vector_store import LogVectorStore
@@ -24,7 +24,6 @@ from config import (
     OPENAI_MODEL,
     OLLAMA_MODEL,
     OLLAMA_BASE_URL,
-    RAG_CONTEXT_MODE,
     TOP_K,
     UNCERTAINTY_SPLIT,
 )
@@ -68,18 +67,7 @@ def get_llm():
 llm = get_llm()
 _VECTOR_DB_CACHE = {}
 
-VALID_RAG_CONTEXT_MODES = {"history_only", "rule_only", "hybrid"}
 VALID_LLM_INPUT_UNITS = {"sequence", "template"}
-
-
-def _normalize_rag_context_mode(mode: str = RAG_CONTEXT_MODE) -> str:
-    normalized = str(mode).strip().lower()
-    if normalized not in VALID_RAG_CONTEXT_MODES:
-        raise ValueError(
-            "RAG_CONTEXT_MODE must be one of "
-            f"{sorted(VALID_RAG_CONTEXT_MODES)}, got {mode!r}"
-        )
-    return normalized
 
 
 def _normalize_llm_input_unit(unit: str = LLM_INPUT_UNIT) -> str:
@@ -90,10 +78,6 @@ def _normalize_llm_input_unit(unit: str = LLM_INPUT_UNIT) -> str:
             f"{sorted(VALID_LLM_INPUT_UNITS)}, got {unit!r}"
         )
     return normalized
-
-
-def _uses_history(mode: str) -> bool:
-    return mode in {"history_only", "hybrid"}
 
 
 def _get_vector_db(dataset: str) -> LogVectorStore:
@@ -253,24 +237,14 @@ def detect(
     small_model_uncertainty: str = "N/A",
     verbose: bool = True,
     decision_mode: str = DECISION_MODE,
-    rag_context_mode: str = RAG_CONTEXT_MODE,
 ):
-    rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
-
-    # 1. 按消融模式检索历史日志和/或规则
-    if _uses_history(rag_context_mode):
-        if vector_db is None:
-            raise ValueError(f"{rag_context_mode} mode requires vector_db")
-        retrieval_result = vector_db.contrastive_search(log, top_k=TOP_K)
-        normal_docs = retrieval_result["normal"]
-        anomaly_docs = retrieval_result["anomaly"]
-        docs = retrieval_result["docs"]
-        context = _format_contrastive_context(normal_docs, anomaly_docs)
-    else:
-        docs = []
-        normal_docs = []
-        anomaly_docs = []
-        context = ""
+    if vector_db is None:
+        raise ValueError("history_only mode requires vector_db")
+    retrieval_result = vector_db.contrastive_search(log, top_k=TOP_K)
+    normal_docs = retrieval_result["normal"]
+    anomaly_docs = retrieval_result["anomaly"]
+    docs = retrieval_result["docs"]
+    context = _format_contrastive_context(normal_docs, anomaly_docs)
     diagnostics = _retrieval_diagnostics(docs)
     normal_diagnostics = _retrieval_diagnostics(normal_docs)
     anomaly_diagnostics = _retrieval_diagnostics(anomaly_docs)
@@ -279,23 +253,13 @@ def detect(
     diagnostics["contrastive_top_k_per_class"] = TOP_K
 
     # 2. 构造提示词
-    mode = str(decision_mode).strip().lower()
-    if mode == "binary":
-        system_prompt, user_prompt_template = get_rag_prompts(DATASET, rag_context_mode)
-    else:
-        system_prompt = ""
-        user_prompt_template = ""
-
-    user_prompt = user_prompt_template.format(
+    user_prompt = RAG_USER_PROMPT.format(
         retrieved_logs=context,
         target_log=log,
         small_model_score=small_model_score,
         small_model_uncertainty=small_model_uncertainty,
     )
-    prompt = LOG_ANOMALY_PROMPT.format(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-    )
+    prompt = LOG_ANOMALY_PROMPT.format(user_prompt=user_prompt)
     if verbose:
         print(f"\n🧠 构造的提示词:\n{prompt}")
     # 3. LLM 调用
@@ -304,11 +268,9 @@ def detect(
     # print(f"\n💡 LLM 输出原始结果:\n{content}")
     # 4. 解析
     parsed = _parse_result(content)
-    if _uses_history(rag_context_mode):
-        parsed = _apply_precision_guard(parsed, diagnostics, decision_mode=decision_mode)
+    parsed = _apply_precision_guard(parsed, diagnostics, decision_mode=decision_mode)
     parsed["llm_raw_output"] = content
     parsed["retrieval"] = diagnostics
-    parsed["rag_context_mode"] = rag_context_mode
     if verbose:
         print(f"异常状态：{parsed['status']}")
         print(f"等级：{parsed['level']}")
@@ -327,7 +289,6 @@ def _run_detect_for_single_item(
     item_text: str,
     vector_db: LogVectorStore | None,
     decision_mode: str,
-    rag_context_mode: str,
     verbose: bool,
     score_text: str = "N/A",
     uncertainty_text: str = "N/A",
@@ -339,7 +300,6 @@ def _run_detect_for_single_item(
         small_model_uncertainty=uncertainty_text,
         verbose=verbose,
         decision_mode=decision_mode,
-        rag_context_mode=rag_context_mode,
     )
 
 
@@ -465,7 +425,6 @@ def _aggregate_template_rows_to_windows(template_rows: pd.DataFrame, original_df
                 "source_row_index": source_idx,
                 "log_text": group["window_text"].iloc[0],
                 "dup_count": int(len(group)),
-                "rag_context_mode": _first_present(group["rag_context_mode"]),
                 "llm_status": status,
                 "llm_level": level,
                 "llm_reason": reason,
@@ -498,10 +457,10 @@ def _aggregate_template_rows_to_windows(template_rows: pd.DataFrame, original_df
     return pd.DataFrame(rows)
 
 
-def _llm_output_prefix(base_prefix: str, llm_input_unit: str, rag_context_mode: str) -> str:
+def _llm_output_prefix(base_prefix: str, llm_input_unit: str) -> str:
     if llm_input_unit == "sequence":
-        return f"{base_prefix}_{rag_context_mode}_contrastive"
-    return f"{base_prefix}_{llm_input_unit}_{rag_context_mode}_contrastive"
+        return f"{base_prefix}_contrastive"
+    return f"{base_prefix}_{llm_input_unit}_contrastive"
 
 # ===================== 主流程 =====================
 
@@ -550,11 +509,9 @@ def _run_llm_rag_on_df(
     decision_mode: str,
     output_prefix: str,
     input_csv: Path,
-    rag_context_mode: str = RAG_CONTEXT_MODE,
     llm_input_unit: str = LLM_INPUT_UNIT,
     verbose: bool = True,
 ):
-    rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
     llm_input_unit = _normalize_llm_input_unit(llm_input_unit)
     df = df.copy()
     status_to_pred = {"normal": 0, "anomaly": 1}
@@ -589,7 +546,6 @@ def _run_llm_rag_on_df(
                 row.log_text,
                 vector_db=vector_db,
                 decision_mode=decision_mode,
-                rag_context_mode=rag_context_mode,
                 verbose=verbose,
                 score_text=str(row.small_model_score_mean),
                 uncertainty_text=str(row.small_model_uncertainty_mean),
@@ -597,7 +553,6 @@ def _run_llm_rag_on_df(
             results.append(
                 {
                     "log_text": row.log_text,
-                    "rag_context_mode": parsed["rag_context_mode"],
                     "llm_status": parsed["status"],
                     "llm_level": parsed["level"],
                     "llm_reason": parsed["reason"],
@@ -622,7 +577,6 @@ def _run_llm_rag_on_df(
                 [
                     "log_text",
                     "dup_count",
-                    "rag_context_mode",
                     "llm_status",
                     "llm_level",
                     "llm_reason",
@@ -655,7 +609,6 @@ def _run_llm_rag_on_df(
                 row.log_text,
                 vector_db=vector_db,
                 decision_mode=decision_mode,
-                rag_context_mode=rag_context_mode,
                 verbose=verbose,
                 score_text=str(row.small_model_score_mean),
                 uncertainty_text=str(row.small_model_uncertainty_mean),
@@ -663,7 +616,6 @@ def _run_llm_rag_on_df(
             results.append(
                 {
                     "log_text": row.log_text,
-                    "rag_context_mode": parsed["rag_context_mode"],
                     "llm_status": parsed["status"],
                     "llm_level": parsed["level"],
                     "llm_reason": parsed["reason"],
@@ -730,18 +682,16 @@ def _run_llm_rag_on_df(
 def second_pass_for_high_uncertain(
     dataset: str = DATASET,
     decision_mode: str = DECISION_MODE,
-    rag_context_mode: str = RAG_CONTEXT_MODE,
     llm_input_unit: str = LLM_INPUT_UNIT,
     verbose: bool = True,
 ):
-    rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
     llm_input_unit = _normalize_llm_input_unit(llm_input_unit)
-    vector_db = _get_vector_db(dataset) if _uses_history(rag_context_mode) else None
+    vector_db = _get_vector_db(dataset)
     input_csv = _resolve_uncertain_csv_path(dataset)
     df = pd.read_csv(input_csv)
     print(
         f"✅ 发现高不确定样本文件: {input_csv}，共 {len(df)} 条样本，"
-        f"RAG_CONTEXT_MODE={rag_context_mode}, LLM_INPUT_UNIT={llm_input_unit}, 历史日志检索=contrastive。"
+        f"LLM_INPUT_UNIT={llm_input_unit}, 历史日志检索=contrastive。"
     )
     return _run_llm_rag_on_df(
         df=df,
@@ -751,10 +701,8 @@ def second_pass_for_high_uncertain(
         output_prefix=_llm_output_prefix(
             f"llm_second_pass_{UNCERTAINTY_SPLIT}_high_uncertain",
             llm_input_unit,
-            rag_context_mode,
         ),
         input_csv=input_csv,
-        rag_context_mode=rag_context_mode,
         llm_input_unit=llm_input_unit,
         verbose=verbose,
     )
@@ -763,13 +711,11 @@ def second_pass_for_high_uncertain(
 def full_test_llm_rag(
     dataset: str = DATASET,
     decision_mode: str = DECISION_MODE,
-    rag_context_mode: str = RAG_CONTEXT_MODE,
     llm_input_unit: str = LLM_INPUT_UNIT,
     verbose: bool = True,
 ):
-    rag_context_mode = _normalize_rag_context_mode(rag_context_mode)
     llm_input_unit = _normalize_llm_input_unit(llm_input_unit)
-    vector_db = _get_vector_db(dataset) if _uses_history(rag_context_mode) else None
+    vector_db = _get_vector_db(dataset)
     input_csv = _resolve_full_test_csv_path(dataset)
     df = pd.read_csv(input_csv)
     return _run_llm_rag_on_df(
@@ -780,10 +726,8 @@ def full_test_llm_rag(
         output_prefix=_llm_output_prefix(
             "llm_full_test_rag",
             llm_input_unit,
-            rag_context_mode,
         ),
         input_csv=input_csv,
-        rag_context_mode=rag_context_mode,
         llm_input_unit=llm_input_unit,
         verbose=verbose,
     )
@@ -797,12 +741,6 @@ if __name__ == "__main__":
         default="high_uncertain",
         choices=["high_uncertain", "full_test"],
         help="high_uncertain=仅高不确定样本, full_test=全测试集消融实验",
-    )
-    parser.add_argument(
-        "--rag-context-mode",
-        default=RAG_CONTEXT_MODE,
-        choices=sorted(VALID_RAG_CONTEXT_MODES),
-        help="history_only=仅历史日志RAG, rule_only=仅规则RAG, hybrid=规则+历史日志RAG",
     )
     parser.add_argument(
         "--verbose",
@@ -820,14 +758,12 @@ if __name__ == "__main__":
     if args.scope == "full_test":
         full_test_llm_rag(
             dataset=args.dataset,
-            rag_context_mode=args.rag_context_mode,
             llm_input_unit=args.llm_input_unit,
             verbose=args.verbose,
         )
     else:
         second_pass_for_high_uncertain(
             dataset=args.dataset,
-            rag_context_mode=args.rag_context_mode,
             llm_input_unit=args.llm_input_unit,
             verbose=args.verbose,
         )
